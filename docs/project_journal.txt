@@ -1,0 +1,217 @@
+DAT535 project journal
+
+This is just a running note of what we have done, what went wrong and why we
+made certain decisions. We can add to it as we go. It does not need to read
+like the final report.
+
+
+22 October 2026 - Getting the dataset sorted
+
+We started with Kolumbus, mainly because it gave us a clear geographical
+scope in Rogaland. The idea was to look at how planned routes, stopping
+patterns and timetables change over time. We were trying to collect roughly
+monthly NeTEx snapshots from January 2025 through September 2026.
+
+The first downloader could fetch the national Entur ZIP files and make
+Kolumbus-focused extracts. At first the collection looked fairly complete:
+there were 21 ZIP files with the expected dates in their names. But we decided
+to inspect the actual contents before starting preprocessing. That turned out
+to be important.
+
+All twelve files labelled as 2025 had exactly the same SHA-256 checksum. They
+were copies of the same payload. Inside them, the ordinary Kolumbus timetable
+XML had a publication date of 2 January 2026. So the names looked historical,
+but they did not give us the twelve different 2025 observations we wanted.
+
+We checked the public bucket listing as well. All 365 daily NeTEx objects
+labelled as 2025 reported the same MD5 checksum and were created on 2 January
+2026. We also checked the publicly visible generations and did not find an
+older usable version there. We do not know what caused this. It looks like
+the same export ended up under a lot of dated names, but that is only our
+interpretation of the evidence.
+
+The script was generating different URLs correctly. Its weakness was that
+HTTP 200 and a readable ZIP were being treated as enough proof that we had
+the right historical data. There was also a reuse problem: an existing
+Kolumbus ZIP could make the script skip extraction even after a national
+archive had been downloaded again. The old manifest was overwritten on each
+run too, which explained why it was not a complete record of the local files.
+
+We used AI assistance to inspect the archives and improve the acquisition
+code. We added source identity and checksum checks, publication-date checks,
+validation before reusing an extraction, and separate manifests for runs.
+The important lesson here was that a ZIP passing its CRC checks still needs
+to be checked for what it actually represents.
+
+
+Deciding what data to use
+
+We found a separate historical GTFS archive with different checksums and
+matching creation dates for the 2025 exports. A January 2025 sample contained
+Kolumbus routes, trip records and 2025 calendars. So there was a possible
+alternative, although we only checked selected members of that sample and
+did not validate every complete monthly GTFS archive.
+
+We decided to continue with NeTEx and use January to September 2026. Switching
+formats would have meant changing the parser and working with a reduced
+representation of the original NeTEx data. We also did not want the project
+to depend on waiting for a reply from Entur or Kolumbus about old backups.
+No request was sent to either organisation.
+
+Then we came back to the amount of data. The teacher had mentioned around
+3.5 GB or more. The nine valid Kolumbus snapshots contained about 2.55 GB of
+provider XML. Their extracts were larger when national stop data and other
+providers' shared files were included, so we had to be careful about what
+we were actually counting.
+
+We considered taking more frequent Kolumbus snapshots or adding another
+provider. We chose Kolumbus plus Agder Kollektivtrafikk, whose code in the
+files is AKT. The main reason for choosing Agder was practical: it brought
+the provider XML total to about 4.15 GB while adding just one provider.
+Skyss would have made the dataset much bigger. Comparing the two providers
+could also be useful later, but we have not done that analysis yet.
+
+Our agreed scope is now KOL + AKT, with one snapshot on the 15th of each
+month from January through September 2026. That is nine combined snapshots.
+These are observations of published timetables. They do not automatically
+give us every change that happened between those dates.
+
+
+Building the combined dataset
+
+We downloaded the nine national source archives, checked their source
+checksums and ZIP integrity, and extracted the KOL and AKT line files,
+their shared definitions and the matching national stop registry. The
+selected XML was kept unchanged, including its original IDs and versions.
+
+We kept both the XML files and compact ZIPs of the same selected content.
+We also recorded source generations, checksums, file-level lineage and
+validation results. The August download timed out near the end. We recovered
+the partial transfer and checked it before using it, so we did not have to
+restart the whole dataset build.
+
+The final numbers are:
+
+  Kolumbus provider XML:          about 2.55 GB
+  Agder provider XML:             about 1.61 GB
+  Both providers together:        about 4.15 GB
+  XML including national stops:   about 7.96 GB
+  Compact ZIPs:                   about 586 MB
+
+There are 4,866 XML files and nine compact ZIP files. The ZIPs and XML folders
+are two forms of the same data, so we should not add their sizes together
+and present that as extra source data. The 4.15 GB figure is uncompressed
+provider XML. We still need to be clear about that when discussing the
+teacher's size expectation.
+
+
+The Agder ID issue
+
+The July validation found repeated ID/version pairs in Agder's XML. We
+looked into an actual example instead of immediately removing duplicates.
+The same ServiceLinkInJourneyPattern ID appeared at order 2 and order 30
+inside the same journey pattern, and both pointed to the same service link.
+
+A journey pattern may visit the same link more than once. The repeated ID
+alone does not tell us which occurrence, if any, is incorrect. If we used
+dropDuplicates on ID and version, we could lose one of the sequence positions.
+That would quietly change the pattern we were trying to analyse.
+
+There were 182 repeated ID/version occurrences across the Agder snapshots:
+61 in July, 60 in August and 61 in September. We preserved them in the raw
+data and recorded warnings. We have not cleaned or corrected them yet.
+This is something to handle properly in the Silver work, with the parent
+journey pattern, sequence order and snapshot context available.
+
+The provider reference checks passed for all nine snapshots, including the
+explicit same-file versions. There are also unresolved references found only
+in the broader national stop registry, which were recorded separately.
+We have not completed full NeTEx schema validation or calendar validation,
+so we should describe the checks we actually performed rather than calling
+the whole dataset perfectly clean.
+
+
+Cleaning up the files and updating the plan
+
+The national ZIPs downloaded for this build were deleted after the extraction
+and validation checks passed. We kept the original selected XML, the combined
+ZIPs and the provenance information. Later, after checking that the new data
+contained the matching 2026 Kolumbus files and stops, the previous Kolumbus
+folder and old netex_manifest.csv were removed. The audit evidence remains.
+
+The dataset folder became a bit messy with reports and manifests everywhere,
+so we organised only that folder. It now has four things at the top level:
+
+  entur_netex_snapshots/kol_agder_2026/
+    README.md
+    xml/
+    zip/
+    metadata/
+
+The detailed reports, manifests and lineage are under metadata. The XML and
+ZIP contents were unchanged by that tidy-up. The completed delivery layout
+is organised differently from an interrupted generator run, so a fresh
+regeneration should use a new output directory.
+
+We also updated task_readme.md to cover Kolumbus and Agder and the January
+to September 2026 period, with nine monthly snapshots. We kept the original
+74 tasks, responsibility split and six-week development plan. We have not
+rewritten the whole plan or marked every task as completed.
+
+
+Where we are now
+
+We have the source dataset, acquisition tools, validation evidence and 16
+passing regression tests for the acquisition/generation code. The current
+dataset is marked complete_with_warnings because we preserved the source
+issues described above.
+
+We do not have the full data engineering pipeline yet. Scanning XML for
+validation and entity counts is not the same as producing structured tables.
+The PySpark transformations, database publishing, API polling, scheduled
+jobs and GUI are still work to do.
+
+The next sensible step is to take one complete snapshot for both providers
+and extract the lines, routes, journeys, journey patterns, passing times,
+stops and calendars into structured tables. We need to keep source IDs,
+versions, sequence positions and file/snapshot lineage while doing that.
+Once the joins and quality rules work for one snapshot, we can run them
+over all nine.
+
+Another thing to remember: seeing a difference between January 15 and
+February 15 does not prove the change happened on either of those days.
+Exact effective dates need calendar/validity evidence or more snapshots.
+And these timetable files describe planned services; they do not tell us
+which buses actually ran or how late they were.
+
+We also noticed that database storage is not explicit in the task breakdown
+yet. That still needs a decision. We have not chosen or set up the database.
+
+
+Next entry:
+
+Date:
+What we worked on:
+What worked / what did not:
+Decisions and why:
+What we need to do next:
+
+
+22 October 2026 - Giving the project a clearer layout
+
+We moved the acquisition scripts into pipeline/ingestion and the plan, journal
+and audit notes into docs. There are now separate places for processing,
+storage, analysis, the GUI, configuration and scheduled-job scripts. Most of
+those are still just reserved areas for the work ahead. The existing dataset
+stayed where it was so we did not break its source and file lineage paths.
+The scripts are now run with python -m from the project root.
+
+
+22 October 2026 - Keeping the initial ingestion setup simple
+
+We have started with a small historical batch ingestion step: use Entur's
+public archive API to get the national NeTEx files, select KOL and AKT and
+their required shared files, and save the data with validation and metadata.
+Periodic API polling is still something we need to implement later.
+
+

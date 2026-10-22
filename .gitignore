@@ -1,0 +1,19 @@
+entur_netex_snapshots/
+audit/
+
+# Python and local environments
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.env.*
+.DS_Store
+build/
+dist/
+
+# Generated pipeline outputs; keep the documented directory skeleton
+/data/**/*
+!/data/**/
+!/data/**/.gitkeep
+!/data/**/README.md
