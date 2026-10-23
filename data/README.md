@@ -1,6 +1,6 @@
 # Pipeline outputs
 
-These directories reserve storage locations for the pipeline work still to build:
+These directories hold or reserve storage locations for pipeline outputs:
 
 | Directory | Intended contents |
 | --- | --- |
@@ -10,10 +10,18 @@ These directories reserve storage locations for the pipeline work still to build
 | `gold/` | Published analytical tables and export files |
 | `quarantine/` | Rejected records/files with reason codes and source lineage |
 
+Local development snapshot collection writes new runs into `bronze/entur/`, each
+with original source data, selected XML/ZIP, lineage and a validation report.
+The GitHub workflow runs on the school's self-hosted Linux runner and writes to
+`DAT535_DATA_ROOT/bronze/entur/` on persistent server storage outside the checkout.
+National sources, selected XML/ZIP and reports stay there, including failed runs.
+Only a report copy is uploaded to GitHub. The storage directory and runner still
+need to be configured on the server.
+
 The existing NeTEx source dataset remains under
 [`entur_netex_snapshots/kol_agder_2026/`](../entur_netex_snapshots/kol_agder_2026/).
-Keeping that location preserves its current metadata paths. The directories here
-are placeholders; creating them does not mean those pipeline stages are complete.
+Keeping that location preserves its current metadata paths. Staging, Silver,
+Gold and quarantine are still placeholders.
 
 Generated data is ignored by Git. The README and directory placeholders remain
 available in a checkout.

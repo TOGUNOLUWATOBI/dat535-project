@@ -8,23 +8,25 @@ The data describes published planned services.
 
 ```text
 pipeline/                 Python code
-  ingestion/              Download and dataset generation tools
+  ingestion/              Historical acquisition and scheduled snapshot collection
   processing/             Planned Bronze, Silver and Gold processing
   storage/                Planned database publication
   analysis/               Planned historical comparisons
 app/                      Planned Streamlit GUI
 config/                   Configuration conventions
-scripts/                  Planned scheduling and deployment scripts
+scripts/                  Operational notes and future deployment helpers
 tests/ingestion/          Acquisition and generation tests
 docs/                     Task plan, project journal, directory map and audits
 entur_netex_snapshots/    Existing original NeTEx dataset
-data/                     Future raw ingestion, staging, Silver, Gold and quarantine
+data/                     Local development outputs; server data uses external storage
 ```
 
 See the [full directory tree](docs/directory_structure.md),
 [task plan](docs/task_readme.md), and [project journal](docs/project_journal.txt).
-Source acquisition is implemented; parsing into tables, PySpark transformations,
-database storage, API polling, scheduling, and the GUI remain to be built.
+Historical acquisition and a weekly GitHub Actions workflow for the school's
+self-hosted Linux runner are implemented. Parsing into tables, PySpark
+transformations, database storage and the GUI remain to be built. Runner setup
+and a first execution on the school server are still pending.
 
 ## Current dataset
 
@@ -48,6 +50,7 @@ dependencies when the Spark, GUI and database parts are implemented.
 ```sh
 python3 -B -m pipeline.ingestion.generate_provider_dataset --help
 python3 -B -m pipeline.ingestion.download_entur_netex --help
+python3 -B -m pipeline.ingestion.poll_entur_netex --help
 ```
 
 To generate a fresh copy, use a **new** output directory:
@@ -68,6 +71,25 @@ For an interrupted build, add `--resume` with the same providers, dates, and
 working output directory. Existing material is verified against its recorded
 lineage. The already completed, tidied delivery under `kol_agder_2026/` should be
 reproduced into a new directory rather than resumed as a working build.
+
+## Weekly ingestion
+
+GitHub Actions is configured to collect KOL + AKT and shared reference XML every
+Monday at **08:23 UTC**, using Sunday's archive. GitHub triggers the job; a
+**self-hosted Linux runner on the school server** executes it. A manual
+**Run workflow** option is included. See [runner setup, storage and validation details](docs/scheduled_ingestion.md).
+
+```sh
+python3 -B -m pipeline.ingestion.poll_entur_netex --check-only
+python3 -B -u -m pipeline.ingestion.poll_entur_netex
+```
+
+Local development runs default to `data/bronze/entur/`. Scheduled runs use
+`DAT535_DATA_ROOT/bronze/entur/` on persistent server storage, outside the checkout.
+Set the repository variable `DAT535_DATA_ROOT` to an existing writable server
+directory, and register the runner with labels `self-hosted`, `linux`, `dat535`.
+Raw data stays on the server; only a report copy is uploaded as a GitHub artifact.
+No automatic server-data deletion is configured.
 
 ## Verification
 

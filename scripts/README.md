@@ -1,7 +1,13 @@
-# Operations and scheduling — planned
+# Operations and scheduling
 
-Place cron entry scripts, deployment helpers, and maintenance commands here.
+Place deployment helpers and maintenance commands here when needed.
 Keep reusable ingestion, storage, and processing logic in `pipeline/`.
 
-Scheduled jobs and deployment scripts have not been implemented yet. The current
-acquisition tools run as Python modules, as shown in the project README.
+Weekly ingestion is scheduled with GitHub Actions in
+[`ingest-netex.yml`](../.github/workflows/ingest-netex.yml), rather than a local
+machine's crontab. GitHub sends the job to a self-hosted Linux runner on the
+school server, which calls `pipeline.ingestion.poll_entur_netex` as a module.
+Scheduled output is kept under the configured `DAT535_DATA_ROOT`, outside the
+runner checkout. Only a report copy is uploaded to GitHub.
+See the [setup and storage notes](../docs/scheduled_ingestion.md). Downstream
+processing orchestration and deployment helpers remain to be built.

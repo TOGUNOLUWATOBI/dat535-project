@@ -189,7 +189,7 @@ Weeks 3–5 · Developer B
 
 | Task ID | Task                                                    | Owner |
 | ------- | ------------------------------------------------------- | ----- |
-| T49     | Configure daily current-timetable ingestion cron        | B     |
+| T49     | Configure weekly GitHub Actions ingestion on the school Linux runner | B     |
 | T50     | Configure periodic API polling                          | B     |
 | T51     | Configure weekly snapshot comparison and reconciliation | B     |
 | T52     | Orchestrate Bronze → Silver → Gold dependencies         | B     |

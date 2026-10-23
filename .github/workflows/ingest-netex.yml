@@ -1,0 +1,93 @@
+name: Ingest Entur NeTEx
+
+on:
+  schedule:
+    # Every Monday at 08:23 UTC; collect Sunday's completed archive.
+    - cron: '23 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      source_date:
+        description: 'Source day YYYY-MM-DD (blank = yesterday in Oslo)'
+        required: false
+        type: string
+      check_only:
+        description: 'Only check source availability; skip the archive download'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: entur-netex-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: [self-hosted, linux, dat535]
+    timeout-minutes: 60
+    env:
+      DAT535_DATA_ROOT: ${{ vars.DAT535_DATA_ROOT }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check server Python and persistent storage before checkout
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+
+          if sys.version_info < (3, 11):
+              raise SystemExit('Install Python 3.11 or newer on the school server')
+          setting = os.environ.get('DAT535_DATA_ROOT', '')
+          if not setting or '\n' in setting or '\r' in setting:
+              raise SystemExit('Set repository variable DAT535_DATA_ROOT to an absolute persistent data directory')
+          if not Path(setting).is_absolute():
+              raise SystemExit('DAT535_DATA_ROOT must be an absolute path')
+          root = Path(setting).resolve()
+          for name in ('GITHUB_WORKSPACE', 'RUNNER_TEMP'):
+              reserved = Path(os.environ[name]).resolve()
+              if root.is_relative_to(reserved) or reserved.is_relative_to(root):
+                  raise SystemExit(f'DAT535_DATA_ROOT must be separate from {name}')
+          if not root.is_dir() or not os.access(root, os.W_OK | os.X_OK):
+              raise SystemExit(f'Create persistent storage writable by the runner account first: {root}')
+          output = root / 'bronze' / 'entur' / f"run-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'INGESTION_OUTPUT={output}\n')
+          print(f'Persistent ingestion output: {output}')
+          PY
+
+      - name: Check out code
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run ingestion tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Collect KOL and AKT snapshot
+        id: ingest
+        env:
+          SOURCE_DATE: ${{ inputs.source_date }}
+          CHECK_ONLY: ${{ inputs.check_only }}
+        shell: bash
+        run: |
+          args=(--output "$INGESTION_OUTPUT")
+          if [[ -n "$SOURCE_DATE" ]]; then
+            args+=(--date "$SOURCE_DATE")
+          fi
+          if [[ "$CHECK_ONLY" == 'true' ]]; then
+            args+=(--check-only)
+          fi
+          python3 -u -m pipeline.ingestion.poll_entur_netex "${args[@]}"
+
+      - name: Upload a copy of the server's ingestion report
+        if: always() && (steps.ingest.outcome == 'success' || steps.ingest.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: entur-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.INGESTION_OUTPUT }}/metadata/
+          if-no-files-found: error
+          retention-days: 30
+

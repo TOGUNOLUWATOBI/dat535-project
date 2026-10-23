@@ -215,3 +215,50 @@ their required shared files, and save the data with validation and metadata.
 Periodic API polling is still something we need to implement later.
 
 
+23 October 2026 - Adding a weekly collection job
+
+The nine monthly snapshots are our starting dataset, but we also want new data
+to arrive after that. We decided to use GitHub Actions for scheduling and chose
+weekly collection. The workflow is set for Monday morning, using Sunday's
+dated archive. That gives the source export time to finish and keeps the dates
+clear. There is also a manual run button for checking the setup.
+
+We reused our KOL and AKT extraction and reference checks instead of making a
+second filtering approach. New runs get their own folders. Downloads have a
+few retries for temporary network errors, and an interrupted attempt keeps its
+bytes rather than overwriting them. Source repeats still stay as warnings;
+missing provider references fail the run.
+
+For now the workflow saves the selected raw ZIP and reports as downloadable
+GitHub artifacts. This is enough to start running the job, but the artifacts
+expire. We still need to decide on permanent storage before relying on this
+as our growing history. Manual reruns can save the same source again; there is
+no shared duplicate lookup between GitHub runs yet.
+
+The new fixture tests passed, and a live metadata-only check found the archive
+for 22 October. We have not run the complete job on GitHub yet. The workflow
+needs to be pushed to the default branch and checked there. This step collects
+raw data; it does not build Silver, Gold, a database or weekly comparisons yet.
+
+
+23 October 2026 - Clarifying where the job will actually run
+
+We clarified that the school will provide a Linux server and that we will run
+the GitHub Actions runner there. GitHub will handle the weekly timer, while
+the school machine does the download, filtering and validation.
+
+This changes the storage arrangement from the earlier note. The workflow now
+keeps raw archives, XML, ZIPs and metadata on persistent school storage. It
+only uploads a copy of the report to GitHub. An expiring GitHub artifact is
+therefore no longer the place we rely on for keeping the data.
+
+We made the storage directory configurable as DAT535_DATA_ROOT. It needs to
+sit outside the checkout because checkout cleanup can remove ignored files.
+The workflow checks that setting before checking out the code. There is no
+automatic removal of server data, including failed download attempts.
+
+We still have to register the Linux runner, add the dat535 label, choose the
+actual storage path and give the runner account access. None of that has
+been done on the server yet. The setup steps are in scheduled_ingestion.md.
+
+
