@@ -1,0 +1,19 @@
+name: NeTEx scheduled trigger
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scheduler-check:
+    runs-on: [self-hosted, linux, dat535]
+    timeout-minutes: 3
+    steps:
+      - name: Identify trigger and runner
+        run: |
+          printf 'event=%s runner=%s\n' "$GITHUB_EVENT_NAME" "$RUNNER_NAME"
+          date -u
