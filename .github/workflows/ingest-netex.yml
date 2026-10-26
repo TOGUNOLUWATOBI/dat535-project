@@ -4,8 +4,6 @@ on:
   schedule:
     # Every Monday at 08:23 UTC; collect Sunday's completed archive.
     - cron: '23 8 * * 1'
-    # Temporary scheduler verification; removed after the first scheduled run.
-    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       source_date:
