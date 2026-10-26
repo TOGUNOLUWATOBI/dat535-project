@@ -48,8 +48,9 @@ dat535-project/
 Python package directories also contain `__init__.py`. Data output directories
 contain `.gitkeep` placeholders. Processing, database storage, analysis and the
 GUI are reserved for upcoming implementation. Weekly ingestion is configured in
-GitHub Actions for a self-hosted Linux runner; server registration, storage setup
-and a first server run are still pending.
+GitHub Actions for a self-hosted Linux runner. The runner and persistent storage
+are configured on `spark`; all 25 tests and a full manual CLI ingestion passed
+there. A first Actions execution awaits merging the workflow into `main`.
 
 Scheduled runs write outside the repository, under the configured absolute
 `DAT535_DATA_ROOT/bronze/entur/` on the school server. That location retains raw

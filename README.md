@@ -25,8 +25,9 @@ See the [full directory tree](docs/directory_structure.md),
 [task plan](docs/task_readme.md), and [project journal](docs/project_journal.txt).
 Historical acquisition and a weekly GitHub Actions workflow for the school's
 self-hosted Linux runner are implemented. Parsing into tables, PySpark
-transformations, database storage and the GUI remain to be built. Runner setup
-and a first execution on the school server are still pending.
+transformations, database storage and the GUI remain to be built. The runner is
+online on `spark`; all 25 tests and a full manual CLI ingestion passed there.
+The first GitHub Actions execution awaits the workflow being merged into `main`.
 
 ## Current dataset
 

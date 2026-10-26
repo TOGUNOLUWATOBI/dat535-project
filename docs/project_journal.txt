@@ -262,3 +262,56 @@ actual storage path and give the runner account access. None of that has
 been done on the server yet. The setup steps are in scheduled_ingestion.md.
 
 
+24 October 2026 - Setting up the runner on spark
+
+We connected to the school Linux server through its SSH jump host. The jump
+host needed an interactive login, so we opened a shared SSH connection from
+the Mac terminal and used that to finish the setup.
+
+There was already a runner for the group04 repository. We left that service
+alone and installed this project's runner separately in
+/home/ubuntu/dat535-runner. The new runner is called dat535-spark and has
+the dat535 label, along with the normal Linux and self-hosted labels.
+
+The server already had Python 3.11. We installed runner version 2.338.1 after
+checking the download's SHA-256. The new service runs as ubuntu and is enabled
+to start when the server boots. GitHub now shows it online.
+
+We created /srv/dat535/data for persistent project storage and set the GitHub
+repository variable DAT535_DATA_ROOT to that path. All 25 ingestion tests
+passed on the server. We also checked Entur's metadata for 23 October and saved
+the result in bronze/entur/setup-check-20261024 under that storage directory.
+That was a small metadata check, so full archive extraction on the server is
+still to test.
+
+The runner is ready, but the ingestion workflow is still on our feature branch.
+It needs to reach main before we can do the first run through GitHub Actions.
+The server had about 26 GB free before installing the runner. Since we retain
+the archives and extracted data, we will need to watch storage as snapshots
+accumulate. We have not copied the historical dataset to the server yet.
+
+
+24 October 2026 - Testing a real manual ingestion
+
+We ran the full ingestion command manually on spark for the 23 October archive.
+This downloaded the national ZIP, selected KOL, AKT and their shared documents,
+kept the full national stop file, and checked the XML and provider references.
+It took about 43 seconds and produced 532 XML files. The original national ZIP,
+loose XML, compact selected ZIP and metadata all stayed on the server under
+/srv/dat535/data/bronze/entur/manual-full-20261023-20261024.
+
+There were no unresolved provider references or same-file version failures.
+Agder had 65 repeated ID/version occurrences, which we preserved and reported
+as warnings. The run therefore finished as complete_with_warnings.
+
+We also checked the saved XML hashes and ZIP contents against the source, then
+tried running the command into the same output directory again. It refused to
+overwrite it, and the stored file inventory stayed unchanged. The small test
+report is saved in the run metadata and copied into our local audit notes.
+
+This tests the manual command on Linux. It does not yet give us evidence of
+the Run workflow button working, since the workflow still needs to reach main.
+The separate existing-ZIP upload requirement also remains to implement and
+test for both KOL and AKT.
+
+

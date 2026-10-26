@@ -16,6 +16,77 @@ It does not collect real-time vehicle positions or delays. The workflow runs
 only ingestion; Silver, Gold, database publication and comparisons still need
 implementation.
 
+## Current installation — 24 October 2026
+
+| Setting | Installed value |
+| --- | --- |
+| Server SSH alias | `spark` |
+| Operating system | Ubuntu 24.04.4 LTS, x86_64 |
+| Python | 3.11.15 |
+| GitHub repository | `TOGUNOLUWATOBI/dat535-project` |
+| Runner | `dat535-spark`, version 2.338.1 |
+| Labels | `self-hosted`, `Linux`, `X64`, `dat535` |
+| Runner directory | `/home/ubuntu/dat535-runner` |
+| Service account | `ubuntu` |
+| Persistent storage | `/srv/dat535/data` |
+| Repository variable | `DAT535_DATA_ROOT=/srv/dat535/data` |
+| Systemd service | `actions.runner.TOGUNOLUWATOBI-dat535-project.dat535-spark.service` |
+
+The service is enabled at boot and GitHub reports the runner online. All 25
+ingestion tests passed on the server. A live metadata-only check for the
+23 October archive succeeded, writing its manifest to
+`/srv/dat535/data/bronze/entur/setup-check-20261024/metadata/manifest.json`.
+The existing `group04` runner on the same server remains active.
+
+The ingestion code is pushed on `ft/initial-setup-plus-initial-data-finding`.
+It still needs merging into `main` before the first GitHub Actions run. Full
+manual command execution on the server has passed, as described below.
+
+## Full manual CLI test — 24 October 2026
+
+The following command was run from
+`/home/ubuntu/dat535-runner/project-check` on `spark`, at commit `3e9e434`:
+
+```sh
+python3 -B -u -m pipeline.ingestion.poll_entur_netex \
+  --date 2026-10-23 \
+  --output /srv/dat535/data/bronze/entur/manual-full-20261023-20261024
+```
+
+It completed in 43.5 seconds with status `complete_with_warnings`:
+
+| Result | Value |
+| --- | --- |
+| Original national ZIP retained | 282,505,026 bytes |
+| Selected XML documents | 532: 322 KOL, 209 AKT and national stops |
+| Provider XML | 409,277,177 bytes |
+| XML including national stops | 822,336,592 bytes |
+| Compact selected ZIP | 63,454,934 bytes |
+| Provider reference occurrences checked | 1,296,889 |
+| Unresolved provider references | 0 |
+| Same-file version failures | 0 |
+| Repeated AKT ID/version occurrences | 65, preserved as source warnings |
+
+After completion we independently verified source size/MD5/SHA-256, all selected
+XML hashes, selected ZIP CRCs and source member names/sizes/CRCs. A second call
+with the same output path was refused with `FileExistsError`; the complete file
+inventory was unchanged. No data was removed. Registry-only diagnostics remain
+separate, and full XSD/calendar validation is still outside these checks.
+
+Evidence is saved on the server as
+`metadata/manual_ingestion_test.json` inside that run. A small local copy is at
+[`audit/2026-10-24/manual_ingestion_test.json`](audit/2026-10-24/manual_ingestion_test.json).
+This evidence covers the manual CLI. A first GitHub Actions dispatch remains
+pending the workflow reaching `main`; importing an existing ZIP through a new
+KOL + AKT upload interface has not been tested here.
+
+To check the runner from a shell on `spark`:
+
+```sh
+sudo systemctl status actions.runner.TOGUNOLUWATOBI-dat535-project.dat535-spark.service
+sudo journalctl -u actions.runner.TOGUNOLUWATOBI-dat535-project.dat535-spark.service -n 50 --no-pager
+```
+
 ## Set up the school server
 
 1. Install Git, Bash and Python 3.11 or newer, including system time-zone data,
@@ -57,8 +128,8 @@ machine without matching labels. See [runner routing and connectivity](https://d
 
 ## Enable the weekly workflow
 
-1. Commit and push the workflow, Python module, tests and documentation to the
-   repository's default branch. The local changes have not been pushed for you.
+1. Merge the ingestion workflow, Python module and tests from
+   `ft/initial-setup-plus-initial-data-finding` into the default branch, `main`.
 2. In **Actions**, open **Ingest Entur NeTEx**, then **Run workflow**. Leave the
    date blank to use yesterday in Oslo. Choose `check_only` for a small metadata
    check first, then run normally to collect and validate an actual snapshot.
@@ -123,7 +194,7 @@ leaves the server's data and manifest intact.
 
 The existing historical dataset remains where it is. Copying that dataset to
 school storage is a separate setup step; the workflow does not move it or add
-it to Git. No server has been registered or accessed during local implementation.
+it to Git. The runner and storage setup above has been completed on the server.
 
 Each workflow execution is a new observation, named by run ID and attempt. A
 manual rerun can collect the same payload again. There is no cross-run duplicate
@@ -166,7 +237,7 @@ python3 -B -m pipeline.ingestion.poll_entur_netex --check-only \
 ```
 
 The unit tests use small ZIP fixtures for full acquisition, filtering and
-reference validation, including transient failures. A live metadata-only check
-for 22 October 2026 succeeded during implementation. A complete run on the school
-runner still needs to be verified after runner registration and pushing the
-workflow.
+reference validation, including transient failures. They passed locally and on
+the school server. A full manual CLI ingestion of the 23 October archive also
+passed on `spark`, with the warnings recorded above. A complete run through
+GitHub Actions still needs to be verified after merging the workflow into `main`.
