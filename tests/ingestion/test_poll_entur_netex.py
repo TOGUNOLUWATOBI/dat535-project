@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -46,9 +47,12 @@ class ScheduledIngestionTests(unittest.TestCase):
         return response
 
     def test_success_keeps_originals_pins_generation_and_writes_portable_lineage(self):
-        with patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()) as request:
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule", "RUNNER_NAME": "dat535-spark"}), \
+                patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()) as request:
             result = poller.ingest_snapshot(self.day, self.output)
         self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["github_event_name"], "schedule")
+        self.assertEqual(result["runner_name"], "dat535-spark")
         self.assertIn("&generation=123", request.call_args.args[0].full_url)
         self.assertEqual((self.output / result["national_zip"]).read_bytes(), self.source.read_bytes())
         self.assertEqual(result["source_sha256"], hashlib.sha256(self.source.read_bytes()).hexdigest())

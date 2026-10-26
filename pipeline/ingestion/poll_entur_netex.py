@@ -81,6 +81,8 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
         "check_only": check_only, "request_failures": [],
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+        "github_event_name": os.environ.get("GITHUB_EVENT_NAME"),
+        "runner_name": os.environ.get("RUNNER_NAME"),
         "git_commit": os.environ.get("GITHUB_SHA"),
     }
     save_json(manifest_path, manifest)
