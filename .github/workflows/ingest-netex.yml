@@ -2,10 +2,8 @@ name: Ingest Entur NeTEx
 
 on:
   schedule:
-    # Every Monday at 08:23 UTC; collect Sunday's completed archive.
-    - cron: '23 8 * * 1'
-    # Temporary single scheduler diagnostic; remove after verification.
-    - cron: '35 22 26 10 *'
+    # Temporary verification of the single cron entry; restore Monday 08:23 UTC.
+    - cron: '14 23 26 10 *'
   workflow_dispatch:
     inputs:
       source_date:
