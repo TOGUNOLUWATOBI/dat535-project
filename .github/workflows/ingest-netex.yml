@@ -1,6 +1,8 @@
 name: Ingest Entur NeTEx
 
 on:
+  push:
+    branches: [main]
   schedule:
     # Every hour at minute 00; collect the previous day's Oslo archive.
     - cron: '0 * * * *'
