@@ -2,8 +2,8 @@ name: Ingest Entur NeTEx
 
 on:
   schedule:
-    # Every hour at minute 23; collect the previous day's Oslo archive.
-    - cron: '23 * * * *'
+    # Every hour at minute 45; collect the previous day's Oslo archive.
+    - cron: '45 * * * *'
   workflow_dispatch:
     inputs:
       source_date:
