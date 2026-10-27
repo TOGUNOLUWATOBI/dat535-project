@@ -4,8 +4,7 @@ on:
   push:
     branches: [main]
   schedule:
-    # Every hour at minute 17; collect the previous day's Oslo archive.
-    - cron: '25 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       source_date:
