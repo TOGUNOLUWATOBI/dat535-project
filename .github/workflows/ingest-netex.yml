@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '*/5 * * * *'
+    # At 08:23 UTC on days 1, 4, 7, ... of each month; resets at month boundaries.
+    - cron: '23 8 */3 * *'
   workflow_dispatch:
     inputs:
       source_date:
