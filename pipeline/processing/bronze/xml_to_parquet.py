@@ -26,29 +26,31 @@ def add_context(spark, raw, selection, inventory_path):
 
     names = ("source_file", "source_member", "provider", "source_xml_sha256",
              "source_profile", "publication_timestamp")
-    schema = StructType([StructField(name, StringType(), False) for name in names])
+    schema = StructType([StructField(name, StringType(), False) for name in (*names, "read_file")])
     with inventory_path.open("x", encoding="utf-8") as handle:
         for item in selection["files"]:
-            handle.write(json.dumps({name: item[name] for name in names}, ensure_ascii=False) + "\n")
+            value = {name: item[name] for name in names}
+            value["read_file"] = item.get("read_file", item["source_file"])
+            handle.write(json.dumps(value, ensure_ascii=False) + "\n")
     inventory = spark.read.schema(schema).json(str(inventory_path))
     # Hadoop and pathlib escape reserved URI characters differently. Decode the
     # local file URI for matching, preserving literal '+' rather than treating
     # it as a URL-encoded space. Keep Spark's original URI for diagnostics.
     local_path = F.regexp_replace(F.input_file_name(), "^file:/+", "/")
     local_path = F.url_decode(F.regexp_replace(local_path, r"\+", "%2B"))
-    framed = (raw.withColumn("source_uri", F.input_file_name()).withColumn("source_file", local_path)
-              .join(inventory, "source_file", "left"))
+    framed = (raw.withColumn("source_uri", F.input_file_name()).withColumn("read_file", local_path)
+              .join(inventory, "read_file", "left").drop("read_file"))
     missing = framed.where(F.col("provider").isNull()).select("source_uri").limit(3).collect()
     if missing:
         raise RuntimeError(f"Spark source paths did not match the source inventory: {[r.source_uri for r in missing]}")
     return framed.withColumn("snapshot_date", F.lit(selection["snapshot_date"]).cast("date"))
 
 
-def projected_tables(frames):
+def projected_tables(frames, extra_context=()):
     from pyspark.sql import functions as F
 
     context = ["snapshot_date", "provider", "source_file", "source_member",
-               "source_xml_sha256", "source_profile", "publication_timestamp"]
+               "source_xml_sha256", "source_profile", "publication_timestamp", *extra_context]
     base = frames.select(*context, F.col("_id").alias("composite_frame_id"),
                          F.col("_version").alias("composite_frame_version"), "frames")
     common = context + ["composite_frame_id", "composite_frame_version"]
