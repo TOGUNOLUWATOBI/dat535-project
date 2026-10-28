@@ -97,8 +97,9 @@ bytes, date and providers refer to the validated first import. See
 
 ## Automatic ingestion
 
-The live workflow on `main` currently requests ingestion **every five minutes**
-as a scheduler test, using the previous day's archive in Oslo. It collects KOL,
+The live workflow on `main` requests ingestion at **08:23 UTC on days 1, 4, 7,
+and so on each month** (`23 8 */3 * *`), using the previous day's archive in Oslo.
+This resets at month boundaries rather than keeping an exact 72-hour interval. It collects KOL,
 AKT and shared reference XML. GitHub triggers the job; a
 **self-hosted Linux runner on the school server** executes it. A manual
 **Run workflow** option is included. See [runner setup, storage and validation details](docs/scheduled_ingestion.md).

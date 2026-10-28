@@ -3,13 +3,15 @@
 The historical January–September 2026 dataset is our starting data. The workflow
 in [ingest-netex.yml](../.github/workflows/ingest-netex.yml) collects new data
 using the previous day's dated Entur archive in Europe/Oslo. The live workflow
-on `main` currently uses `*/5 * * * *` as a five-minute scheduler test. Using the previous day avoids
-depending on the completion time of that morning's export.
+on `main` uses `23 8 */3 * *`: 08:23 UTC on days 1, 4, 7, and so on each month.
+The day-of-month sequence resets monthly, so this is not an exact rolling
+72-hour interval. Using the previous day avoids depending on the completion
+time of that morning's export.
 
 Every push to `main` also triggers full ingestion. The push trigger was verified
 on 27 October; scheduled ingestion was verified overnight on 27–28 October.
-The observed scheduled runs were hours apart, so a reliable five-minute
-execution interval has not been demonstrated.
+The earlier five-minute test produced runs hours apart; the new schedule is
+a requested trigger time, not a guarantee of exact delivery.
 
 GitHub handles the timer and sends the job to a **self-hosted Linux runner on
 the school server**. The server executes the Python command and keeps the data
@@ -269,9 +271,10 @@ Each workflow execution is a new observation, named by run ID and attempt. A
 manual rerun can collect the same payload again. There is no cross-run duplicate
 lookup yet. The content-based `ingestion_id` lets later database/storage work
 recognize identical national payloads for the same provider selection. The
-test schedule still requests yesterday's dated archive, so it can download
+schedule still requests yesterday's dated archive, so it can download
 and retain that same archive repeatedly within a day. It does not backfill
-missed days or provide source changes every five minutes.
+missed days. A three-day schedule samples one source day per execution; it does
+not automatically collect all three intervening daily archives.
 
 ## Run the same command locally
 

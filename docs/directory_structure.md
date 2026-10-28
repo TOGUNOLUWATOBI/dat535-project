@@ -61,8 +61,8 @@ GitHub Actions for a self-hosted Linux runner. The runner and persistent storage
 are configured on `spark`; all 25 tests and a full manual CLI ingestion passed
 there. The workflow is now on `main`, and a full manual Actions run passed.
 Three successful `schedule` runs were verified overnight on 27–28 October.
-The live five-minute test schedule produced runs hours apart; its requested
-interval is not demonstrated by those observations.
+The earlier five-minute test produced runs hours apart. The current schedule
+requests 08:23 UTC on days 1, 4, 7, and so on each month; it resets monthly.
 
 Scheduled runs write outside the repository, under the configured absolute
 `DAT535_DATA_ROOT/bronze/entur/` on the school server. That location retains raw

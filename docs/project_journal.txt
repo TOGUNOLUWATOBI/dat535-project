@@ -475,3 +475,19 @@ their tests and the updated usage notes. All 46 tests passed, and the January
 provider conversion was checked locally. We kept main's current five-minute
 cron setting when bringing the development branch up to date. The next server
 test needs the new code pulled into the cloned dat535-project first.
+
+28 October 2026 - Slowing down the ingestion schedule
+
+We changed main from the five-minute test to 08:23 UTC on days 1, 4, 7 and so on
+each month. That is how the cron expresses every third day, but it resets when
+the month changes rather than counting exactly 72 hours. Push to main and
+manual runs still work. Each run asks for yesterday's archive; it does not go
+back and download the days between runs.
+
+We also talked about checkpoints. The existing manifests tell us which imports
+and Parquet outputs completed, and manual uploads have their own duplicate
+catalog. We have not yet built a shared pipeline checkpoint registry. That
+should be part of the next processing milestone, so a failure in Silver does
+not require downloading Bronze again. The next useful target is one January
+snapshot working on the school server, then the missing reference tables and
+the first validated Silver joins before scaling to all nine months.
