@@ -491,3 +491,103 @@ should be part of the next processing milestone, so a failure in Silver does
 not require downloading Bronze again. The next useful target is one January
 snapshot working on the school server, then the missing reference tables and
 the first validated Silver joins before scaling to all nine months.
+
+28 October 2026 - First complete processing slice
+
+We read the whole task breakdown again. The main target is still substantial
+Silver processing in PySpark, with historical route changes and a GUI later.
+Today we added the shared definitions needed to connect journeys to their
+patterns, routes, scheduled stops, quays and calendars. January's local full
+staging run matched every expected count, including 25,289 journeys, 768,701
+passing times, 3,148 routes and 3,246 journey patterns.
+
+Spark quietly ignored the source filenames beginning with an underscore. The
+count checks caught this before we could call the extraction complete. We now
+read those files through symbolic aliases and keep the original source paths
+and hashes. Another useful catch was HentMeg: its routes use FlexibleLineRef,
+and its journeys describe operating windows. We preserved those fields and
+separated flexible service from the fixed-departure metrics.
+
+The processing registry now lives outside the checkout. It records attempts,
+checks completed output hashes before reuse, and resumes at stage boundaries.
+We tested failed attempts, changed files, conflicting locks and reruns. Failed
+outputs remain available. Calendar tests cover weekday patterns, explicit date
+exceptions and overnight offsets. The default metrics use a stated seven-day
+window from each snapshot, not a claim that we observed every day of the month.
+
+The school server had Java 8 active. We installed a checksum-verified Java 17
+runtime under /home/ubuntu/dat535-runtime, keeping the system Java unchanged.
+All 57 tests passed on the server. Its cloned repository had older history, so
+we preserved that branch and checked out server/processing-20261028 for this
+work. The historical batch was then started against the existing Bronze data,
+with its log in /srv/dat535/data/metadata/processing/historical-20261028.log.
+Batch completion is recorded separately after checking the actual manifests.
+
+Disk space is tight, around 1.7 GiB before the historical run. We verified seven
+duplicate national ZIP copies which could share storage through hardlinks,
+but have not changed them because raw-storage approval is still pending. We
+also reduced the new Silver output by dropping repeated join-helper fields
+while preserving source lineage, reference versions and the row grain.
+
+This is still a first pipeline slice. Route-history/SCD tables, renumbering
+verification, GUI/database publication, automatic processing after ingestion,
+and broader performance evidence remain on the task list.
+
+28 October 2026 - January verified on the school server
+
+The real January run completed staging, Silver and Gold on spark. Silver kept
+all 25,289 journeys and 768,701 passing times. It reported zero quarantined
+journeys, zero quarantined passing times, zero conflicting stop definitions
+and zero calendar issues. The HentMeg records now resolve as flexible services
+instead of being mistaken for missing line references.
+
+For 15-21 January, Silver produced 53,345 service occurrences. Gold's 53,322
+fixed-service departures reconciled exactly; 23 flexible-service occurrences
+were kept in the excluded-service table. This is planned service from the
+January snapshot. It is not a count of buses that actually ran.
+
+The January checkpoint paths are:
+staging/entur/2026-01-15/c1565aaadd3eb72c/staging-334aacd1c05b
+silver/entur/2026-01-15/c1565aaadd3eb72c/silver-9e48ff98b18a
+gold/entur/2026-01-15/c1565aaadd3eb72c/gold-997f99eb64a7
+These are relative to /srv/dat535/data. The compact Silver outputs total about
+56.6 MB of Parquet, and Gold about 0.37 MB. February was processing at the last
+check; the remaining months are not yet claimed complete. The disk had about
+920 MiB free during that run. We requested more access time before the original
+90-minute window ended, and still have not consolidated raw archive copies.
+
+28 October 2026 - Approved archive storage consolidation
+
+The user approved the seven duplicate ZIP hardlinks and extended access by
+30 minutes. We checked all source and target hashes again, replaced each
+duplicate copy atomically, and checked the hashes and shared inodes afterwards.
+All original paths and bytes remain available. The seven copies now share
+their two matching original archive files, recovering 1,957,911,441 bytes of
+physical storage. These archive paths must continue to be treated as immutable.
+The server audit is metadata/storage-consolidation-20261028.json under the data
+root. Free space was around 3 GiB afterwards, so the historical batch could
+continue. January through April had completed at the next check, and May was
+being staged. The main workflow still runs ingestion only; the development
+workflow now includes processing and a saved checkpoint report for review.
+
+28 October 2026 - Nine months complete, and the checkpoint rerun worked
+
+All nine historical snapshots finished staging, Silver and Gold on the school
+server. Across them we preserved 263,757 journey occurrences and 8,296,954
+passing-time occurrences. Every month had zero quarantined journeys, zero
+quarantined passing times and zero calendar issues under our current checks.
+The Gold counts reconciled in every declared seven-day window. We still need
+broader profile validation, historical route modeling and interpretation of
+the changes; these successful checks do not settle those tasks.
+
+We ran the whole historical command again. It reused all 27 completed stages,
+and the registry stayed at 27 attempts. That gives us a real server check of
+the checkpoint design, beyond the small tests. There was no new download or
+replacement of the completed outputs. The exact monthly counts and limits
+are recorded in docs/processing_pipeline.md.
+
+Free space after the batch is around 1.8 GiB. The proposed Actions chain now
+checks for 2 GiB before full ingestion and processing, rather than filling the
+disk. We will need more persistent storage for continued new snapshots. The
+new Actions processing step has passed workflow validation locally; a live
+Actions run and publication to main remain to verify.

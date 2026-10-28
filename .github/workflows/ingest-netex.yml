@@ -33,10 +33,13 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Check server Python and persistent storage before checkout
+        env:
+          CHECK_ONLY: ${{ inputs.check_only }}
         shell: bash
         run: |
           python3 - <<'PY'
           import os
+          import shutil
           from pathlib import Path
           import sys
 
@@ -54,6 +57,8 @@ jobs:
                   raise SystemExit(f'DAT535_DATA_ROOT must be separate from {name}')
           if not root.is_dir() or not os.access(root, os.W_OK | os.X_OK):
               raise SystemExit(f'Create persistent storage writable by the runner account first: {root}')
+          if os.environ.get('CHECK_ONLY') != 'true' and shutil.disk_usage(root).free < 2 * 1024**3:
+              raise SystemExit('Full ingestion and processing need at least 2 GiB free; add storage before retrying. No automatic deletion is configured.')
           output = root / 'bronze' / 'entur' / f"run-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
               env.write(f'INGESTION_OUTPUT={output}\n')
@@ -83,6 +88,23 @@ jobs:
             args+=(--check-only)
           fi
           python3 -u -m pipeline.ingestion.poll_entur_netex "${args[@]}"
+
+      - name: Process validated snapshot through Silver and Gold
+        id: process
+        if: steps.ingest.outcome == 'success' && inputs.check_only != true
+        shell: bash
+        run: |
+          bash scripts/run_processing.sh \
+            --manifest "$INGESTION_OUTPUT/metadata/manifest.json" \
+            --data-root "$DAT535_DATA_ROOT"
+
+      - name: Save processing checkpoint report
+        if: always() && (steps.process.outcome == 'success' || steps.process.outcome == 'failure')
+        shell: bash
+        run: |
+          python3 -m pipeline.checkpoints \
+            --state "$DAT535_DATA_ROOT/pipeline_state.sqlite3" \
+            > "$INGESTION_OUTPUT/metadata/processing_checkpoints.json"
 
       - name: Upload a copy of the server's ingestion report
         if: always() && (steps.ingest.outcome == 'success' || steps.ingest.outcome == 'failure')

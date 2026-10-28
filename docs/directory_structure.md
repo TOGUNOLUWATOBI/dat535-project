@@ -10,23 +10,26 @@ dat535-project/
 │   └── workflows/
 │       └── ingest-netex.yml           Automatic jobs on the school Linux runner
 ├── pipeline/                         Python package
+│   ├── checkpoints.py                SQLite attempt history and verified reuse
+│   ├── run_snapshot.py               Checkpointed historical/API/manual processing
 │   ├── ingestion/                    Implemented source acquisition tools
 │   │   ├── download_entur_netex.py
 │   │   ├── generate_provider_dataset.py
 │   │   ├── ingest_local_zip.py        Import and validate existing ZIPs
 │   │   └── poll_entur_netex.py        Collect one new dated snapshot
-│   ├── processing/                   Spark staging and planned Silver/Gold processing
+│   ├── processing/                   Spark staging, first Silver and Gold processing
 │   │   ├── bronze/                   XML-to-Parquet conversion and source lineage
 │   │   │   ├── xml_to_parquet.py      Spark conversion and Parquet read-back checks
+│   │   │   ├── snapshot_to_parquet.py Complete provider/shared/stop projection
 │   │   │   ├── netex_schema.py        Explicit nested entity schemas
 │   │   │   └── staging_sources.py     Validated manifest and source selection
-│   │   ├── silver/                   Types, calendars, joins and quality rules
-│   │   └── gold/                     Analytical aggregations
+│   │   ├── silver/                   build.py joins/quality; calendars.py date rules
+│   │   └── gold/                     build.py planned-service metrics
 │   ├── storage/                      Planned database publication
 │   └── analysis/                     Planned historical service comparisons
 ├── app/                              Planned Streamlit GUI
 ├── config/                           Configuration conventions
-├── scripts/                          Operational notes and future deployment helpers
+├── scripts/                          run_processing.sh uses the school Spark/Java environment
 ├── tests/
 │   ├── ingestion/                    Acquisition/generation regression tests
 │   └── processing/                   Source selection and actual Spark tests
@@ -37,6 +40,7 @@ dat535-project/
 │   ├── scheduled_ingestion.md         School runner setup and persistent storage
 │   ├── manual_ingestion.md            Existing ZIP imports and repeat uploads
 │   ├── xml_to_parquet.md              Spark staging schemas, checks and usage
+│   ├── processing_pipeline.md        Checkpoints, Silver/Gold contracts and server commands
 │   └── audit/                        Historical investigation and build evidence
 ├── entur_netex_snapshots/             Existing source dataset, ignored by Git
 │   └── kol_agder_2026/
@@ -54,12 +58,12 @@ dat535-project/
 ```
 
 Python package directories also contain `__init__.py`. Data output directories
-contain `.gitkeep` placeholders. Initial Spark staging is implemented; further
-entity parsing, Silver/Gold transformations, database storage, analysis and the
+contain `.gitkeep` placeholders. Complete staging and the first Silver/Gold
+slice are implemented. Route-history modeling, database publication and the
 GUI remain to build. Automatic ingestion is configured in
 GitHub Actions for a self-hosted Linux runner. The runner and persistent storage
-are configured on `spark`; all 25 tests and a full manual CLI ingestion passed
-there. The workflow is now on `main`, and a full manual Actions run passed.
+are configured on `spark`; all 57 current tests passed there with Java 17 and
+PySpark 4.2.0. The ingestion workflow is on `main`, and a full manual Actions run passed.
 Three successful `schedule` runs were verified overnight on 27–28 October.
 The earlier five-minute test produced runs hours apart. The current schedule
 requests 08:23 UTC on days 1, 4, 7, and so on each month; it resets monthly.

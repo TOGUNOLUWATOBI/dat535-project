@@ -97,3 +97,21 @@ class SnapshotPipelineTests(unittest.TestCase):
         reconciliation=json.loads((gold/'metadata/manifest.json').read_text())['reconciliation']
         self.assertEqual(reconciliation['gold_scheduled_departures'],5)
         self.assertEqual(reconciliation['excluded_service_occurrences'],15)
+
+    def test_ambiguous_unversioned_references_do_not_multiply_source_rows(self):
+        from pipeline.processing.silver.build import lookup
+        source=self.spark.createDataFrame([
+            ('unversioned','KOL','line.xml','same',None),
+            ('versioned','KOL','line.xml','same','2'),
+            ('missing','KOL','line.xml','absent',None)],
+            ['occurrence_key','provider','source_member','ref_id','ref_version'])
+        target=self.spark.createDataFrame([
+            ('first','KOL','line.xml','same','1'),('second','KOL','line.xml','same','2')],
+            ['occurrence_key','provider','source_member','entity_id','entity_version'])
+        rows={r.occurrence_key:r for r in lookup(source,target,'ref_id','ref_version','match_').collect()}
+        self.assertEqual(len(rows),3)
+        self.assertFalse(rows['unversioned'].match_resolved)
+        self.assertEqual(rows['unversioned'].match_matches,2)
+        self.assertTrue(rows['versioned'].match_resolved)
+        self.assertEqual(rows['versioned'].match_entity_version,'2')
+        self.assertFalse(rows['missing'].match_resolved)

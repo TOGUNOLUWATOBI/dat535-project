@@ -24,10 +24,11 @@ data/                     Local development outputs; server data uses external s
 See the [full directory tree](docs/directory_structure.md),
 [task plan](docs/task_readme.md), and [project journal](docs/project_journal.txt).
 Historical acquisition and an automatic GitHub Actions workflow for the school's
-self-hosted Linux runner are implemented. Initial XML-to-Parquet staging is
-implemented; further entity parsing, Silver transformations, database storage
-and the GUI remain to be built. The runner is
-online on `spark`; all 25 tests and a full manual CLI ingestion passed there.
+self-hosted Linux runner are implemented. Complete snapshot staging and the
+first checkpointed Silver/Gold processing slice are implemented. Historical
+route-change modeling, database publication and the GUI remain to build.
+The runner is online on `spark`; all 57 current tests passed there with
+PySpark 4.2.0 and a project-specific Java 17 runtime.
 The workflow is published on `main`. Full manual and automatic push-triggered
 Actions ingestion passed on `dat535-spark`: [successful push run](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40537981353).
 Scheduled ingestion was also verified overnight on 27–28 October:

@@ -228,9 +228,10 @@ Done when: Scheduled jobs run without manual intervention, and failed upstream p
 
 The processing CLI now has persistent SQLite stage checkpoints, exclusive
 snapshot locks, implementation/input fingerprints and verified output reuse.
-It chains staging → Silver → Gold and retains failed attempts. The current
-GitHub workflow still schedules ingestion only; connecting processing to it
-remains open until the server/storage validation is complete.
+It chains staging → Silver → Gold and retains failed attempts. The development
+workflow now calls processing after validated ingestion and copies checkpoint
+status into its report artifact. That change must reach `main` and pass an
+automatic run before end-to-end scheduling is claimed complete.
 
 ### EPIC 09 — Streamlit GUI
 

@@ -41,6 +41,8 @@ Outputs live outside the checkout under:
 Every attempt gets a new directory. There is no automatic deletion or
 overwriting of failed attempts. Processing refuses to start a new snapshot
 with less than 800 MiB free; this is a minimum guard, not a capacity guarantee.
+The development Actions workflow additionally requires 2 GiB free before a
+full ingestion/processing job. Source availability checks skip that budget.
 
 ## What a checkpoint means
 
@@ -65,8 +67,10 @@ Exclusive OS locks prevent simultaneous processing of the same source through
 the same registry. Crashes release the lock; the next run records unfinished
 attempts as `interrupted`. This resumes at stage boundaries, not midway through
 an XML file or Spark partition. The SQLite registry is processing metadata; it
-is not the analytical database. The GitHub workflow currently runs ingestion
-only; automatic processing still needs to be connected after server validation.
+is not the analytical database. The development workflow now chains validated
+ingestion into this processing command and copies checkpoint status into its
+report artifact. That change needs to reach `main` before scheduled/push runs
+use it. Metadata-only checks skip processing.
 
 ## Tables and keys
 
@@ -133,3 +137,39 @@ different files, reference versions, leading-zero public codes, calendar
 exceptions, overnight times, flexible windows, invalid-time quarantine, Gold
 reconciliation, safe reruns, failed attempts, lock conflicts and altered-output
 recovery. See the project journal for dated real-dataset/server results.
+
+## Historical server run — 28 October 2026
+
+All nine snapshots completed staging, Silver and Gold on `group4-spark-vm`.
+Each Gold total reconciled to eligible fixed-service occurrences in Silver.
+The last column covers the seven days starting on that snapshot date, across
+the selected providers' transport modes; it is not a whole-month total.
+
+| Snapshot | Journey occurrences | Passing-time occurrences | Gold fixed departures |
+| --- | ---: | ---: | ---: |
+| 2026-01-15 | 25,289 | 768,701 | 53,322 |
+| 2026-02-15 | 28,628 | 906,396 | 48,927 |
+| 2026-03-15 | 32,702 | 1,034,292 | 53,461 |
+| 2026-04-15 | 32,974 | 1,075,434 | 53,369 |
+| 2026-05-15 | 34,328 | 1,109,078 | 53,580 |
+| 2026-06-15 | 34,089 | 1,092,197 | 52,936 |
+| 2026-07-15 | 25,581 | 765,424 | 40,527 |
+| 2026-08-15 | 23,592 | 725,385 | 54,904 |
+| 2026-09-15 | 26,574 | 820,047 | 55,467 |
+
+Totals: 263,757 journey occurrences and 8,296,954 passing-time occurrences.
+The declared windows contain 466,493 fixed-service occurrences and 192
+flexible-service occurrences, reported separately. All nine runs had zero
+quarantined journeys/passing times and zero calendar issues under the current
+rules. These results do not replace full NeTEx profile/XSD validation.
+
+A second full historical invocation reused all 27 completed stages. The registry
+still contained exactly 27 attempts, with 27 reuse events and no new output
+directories. The logs are under `/srv/dat535/data/metadata/processing/`.
+
+With user approval, seven byte-identical national ZIP copies were consolidated
+using hardlinks, retaining every original path and checksum. This recovered
+1,957,911,441 bytes. All archive paths remain immutable. Around 1.8 GiB remained
+free after the batch; additional persistent capacity is needed before relying
+on continued full scheduled ingestion. The development workflow's 2 GiB
+preflight budget prevents it from starting a full job below that threshold.

@@ -1,5 +1,9 @@
 # NeTEx XML to staging Parquet
 
+This page describes the original four-table provider projection. The subsequent
+[complete processing pipeline](processing_pipeline.md) includes shared routes,
+stops and calendars, plus checkpointed Silver and Gold jobs.
+
 The first processing job reads XML directly with Spark 4's built-in XML reader
 and writes Parquet before Silver cleaning and joins. Raw XML and ZIPs stay in
 Bronze. There is no intermediate XML-to-JSON conversion.

@@ -25,8 +25,11 @@ The existing NeTEx source dataset remains under
 [`entur_netex_snapshots/kol_agder_2026/`](../entur_netex_snapshots/kol_agder_2026/).
 Keeping that location preserves its current metadata paths. Staging now has a
 first Spark projection for provider frames, lines, service journeys and passing
-times; see [XML-to-Parquet processing](../docs/xml_to_parquet.md). Silver, Gold
-and quarantine remain placeholders.
+times; see [XML-to-Parquet processing](../docs/xml_to_parquet.md). The complete
+processing command also writes shared-reference staging, Silver, Gold and
+per-run `quarantine_*` tables. The separate top-level `quarantine/` directory is
+still reserved; current rejected records stay beside their Silver run. See
+[processing/checkpoint contracts](../docs/processing_pipeline.md).
 
 Generated data is ignored by Git. The README and directory placeholders remain
 available in a checkout.
