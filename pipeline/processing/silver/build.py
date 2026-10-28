@@ -76,6 +76,8 @@ def build_silver(spark, staging, output, service_from=None, service_to=None):
     def flatten(name, fields):
         raw = read(name)
         return raw.select("snapshot_date", "provider", "source_member", "source_xml_sha256",
+            "composite_frame_id", "composite_frame_version", "parent_frame_id", "parent_frame_version",
+            "parent_frame_index", "entity_index", "entity_type",
             "valid_from", "valid_to", occurrence(name).alias("occurrence_key"),
             F.col("record._id").alias("entity_id"), F.col("record._version").alias("entity_version"),
             *[F.col(expression).alias(label) for label, expression in fields.items()])
@@ -230,7 +232,19 @@ def build_silver(spark, staging, output, service_from=None, service_to=None):
                    (F.col("departure_seconds") < F.col("arrival_seconds"), "arrival_after_departure"),
                    (F.coalesce("arrival_seconds", "departure_seconds") < F.col("previous_seconds"), "non_monotonic_time")]
         times = times.withColumn("reason_codes", F.filter(F.array(*[F.when(c,F.lit(r)) for c,r in reasons]), lambda x:x.isNotNull()))
-        times = write("passing_times", times.withColumn("is_valid", F.size("reason_codes") == 0))
+        # Lookup candidate IDs/hashes are execution helpers. Keep source lineage,
+        # reference versions and resolved values without repeating those helpers
+        # on every passing time. Grain is (journey_key, passing_time_index).
+        columns = ["snapshot_date", "provider", "source_member", "source_xml_sha256", "journey_key",
+            "passing_time_index", "passing_time_id", "passing_time_version", "pattern_key", "line_key",
+            "point_ref", "point_ref_version", "point_entity_version", "point_source_order",
+            "point_scheduled_stop_ref", "point_scheduled_stop_version", "stop_entity_version", "stop_name",
+            "assignment_entity_version", "assignment_quay_ref", "assignment_quay_version",
+            "assignment_flexible_stop_place_ref", "quay_stop_place_id", "quay_entity_version", "quay_name",
+            "quay_latitude", "quay_longitude", "flex_name", "arrival_time_raw", "departure_time_raw",
+            "arrival_day_offset_raw", "departure_day_offset_raw", "earliest_departure_time_raw", "latest_arrival_time_raw",
+            "arrival_seconds", "departure_seconds", "reason_codes", "is_flexible"]
+        times = write("passing_times", times.select(*columns).withColumn("is_valid", F.size("reason_codes") == 0))
         write("quarantine_passing_times", times.where("NOT is_valid"))
         time_flags = times.groupBy("journey_key").agg(F.count("*").alias("passing_time_count"),
             F.sum((~F.col("is_valid")).cast("long")).alias("invalid_passing_times"),

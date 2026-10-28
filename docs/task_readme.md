@@ -130,9 +130,12 @@ Done when: At least one complete Kolumbus and Agder snapshot is transformed into
 First projection implemented on 28 October: direct Spark 4 XML reads and Parquet
 for provider CompositeFrames, lines, service journeys and ordered passing times.
 Source hashes, parent frame IDs/versions and occurrence indices are retained.
-See [XML-to-Parquet processing](xml_to_parquet.md). Structured routes, journey
-patterns, stops and calendar definitions remain to implement; this epic is not
-complete yet.
+See [XML-to-Parquet processing](xml_to_parquet.md). A subsequent complete
+projection adds routes, journey patterns/points, shared calendar definitions,
+scheduled stops, assignments, flexible stops, national stop places and quays.
+The first January run matched all Bronze counts locally. See
+[checkpointed processing](processing_pipeline.md) for schemas, commands and
+validation limits; server verification is recorded separately in the journal.
 
 ## Phase 2 — Silver and historical analytics
 
@@ -159,6 +162,12 @@ Weeks 3–4 · Both developers
 | T37     | Write unit tests for transformations and Spark SQL checks      | Both  |
 
 Done when: The cleaned Silver data is reusable and documented, with passing schema tests, validated joins, and quantitative quality results.
+
+First implementation: file-scoped version-aware joins, calendar expansion,
+signed overnight offsets, flexible-service classification, count reconciliation,
+quality reasons and quarantine outputs. This is a first processing slice;
+timezone/DST timestamps, broader profiling and all remaining special NeTEx
+cases still need assessment against the historical snapshots.
 
 ### EPIC 06 — Historical route change detection
 
@@ -193,6 +202,12 @@ Weeks 4–5 · Developer A
 
 Done when: Gold datasets support comparisons across selected dates and are reconciled against the underlying timetable records.
 
+First implementation: daily planned departures per line, bounded service-window
+summaries, planned stop coverage and reconciliation with eligible Silver
+service occurrences. Route-change/SCD tables and before/after comparisons are
+still open. Default windows are seven days from each snapshot, not complete
+monthly observations.
+
 ## Phase 3 — Automation, GUI and deployment
 
 ### EPIC 08 — Scheduled pipeline orchestration
@@ -210,6 +225,12 @@ Weeks 3–5 · Developer B
 | T53     | Add job locking, safe reruns and failure recovery       | B     |
 
 Done when: Scheduled jobs run without manual intervention, and failed upstream processing prevents invalid downstream publication.
+
+The processing CLI now has persistent SQLite stage checkpoints, exclusive
+snapshot locks, implementation/input fingerprints and verified output reuse.
+It chains staging → Silver → Gold and retains failed attempts. The current
+GitHub workflow still schedules ingestion only; connecting processing to it
+remains open until the server/storage validation is complete.
 
 ### EPIC 09 — Streamlit GUI
 

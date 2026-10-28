@@ -122,6 +122,12 @@ duplicate detection is not implemented yet.
 
 ## XML to Parquet
 
+The complete checkpointed processing command and current Silver/Gold contracts
+are documented in [processing pipeline](docs/processing_pipeline.md). It adds
+shared calendar/stop projections, validated joins, quarantine tables and
+reconciled planned-service metrics. Historical route-change modeling and the GUI
+remain to build.
+
 The first Spark job reads provider CompositeFrames directly from NeTEx XML and
 writes staging Parquet for frames, lines, service journeys and ordered passing
 times. It retains source/frame context and checks counts against Bronze
