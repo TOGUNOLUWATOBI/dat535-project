@@ -1,1 +1,1 @@
-"""Implemented Entur download and dataset generation tools."""
+"""Entur downloads, historical generation and manual ZIP ingestion."""

@@ -4,17 +4,22 @@
 dat535-project/
 ├── README.md
 ├── .gitignore
+├── requirements-processing.txt       PySpark 4.2.0 for staging jobs
 ├── .github/
 │   ├── actionlint.yaml                Recognize the custom school runner label
 │   └── workflows/
-│       └── ingest-netex.yml           Weekly jobs on the school Linux runner
+│       └── ingest-netex.yml           Automatic jobs on the school Linux runner
 ├── pipeline/                         Python package
 │   ├── ingestion/                    Implemented source acquisition tools
 │   │   ├── download_entur_netex.py
 │   │   ├── generate_provider_dataset.py
+│   │   ├── ingest_local_zip.py        Import and validate existing ZIPs
 │   │   └── poll_entur_netex.py        Collect one new dated snapshot
-│   ├── processing/                   Planned parsing and PySpark processing
-│   │   ├── bronze/                   NeTEx entities and source lineage
+│   ├── processing/                   Spark staging and planned Silver/Gold processing
+│   │   ├── bronze/                   XML-to-Parquet conversion and source lineage
+│   │   │   ├── xml_to_parquet.py      Spark conversion and Parquet read-back checks
+│   │   │   ├── netex_schema.py        Explicit nested entity schemas
+│   │   │   └── staging_sources.py     Validated manifest and source selection
 │   │   ├── silver/                   Types, calendars, joins and quality rules
 │   │   └── gold/                     Analytical aggregations
 │   ├── storage/                      Planned database publication
@@ -23,12 +28,15 @@ dat535-project/
 ├── config/                           Configuration conventions
 ├── scripts/                          Operational notes and future deployment helpers
 ├── tests/
-│   └── ingestion/                    Acquisition/generation regression tests
+│   ├── ingestion/                    Acquisition/generation regression tests
+│   └── processing/                   Source selection and actual Spark tests
 ├── docs/
 │   ├── task_readme.md                 Project scope and task breakdown
 │   ├── project_journal.txt            Running account of decisions and progress
 │   ├── directory_structure.md         This directory map
 │   ├── scheduled_ingestion.md         School runner setup and persistent storage
+│   ├── manual_ingestion.md            Existing ZIP imports and repeat uploads
+│   ├── xml_to_parquet.md              Spark staging schemas, checks and usage
 │   └── audit/                        Historical investigation and build evidence
 ├── entur_netex_snapshots/             Existing source dataset, ignored by Git
 │   └── kol_agder_2026/
@@ -46,11 +54,15 @@ dat535-project/
 ```
 
 Python package directories also contain `__init__.py`. Data output directories
-contain `.gitkeep` placeholders. Processing, database storage, analysis and the
-GUI are reserved for upcoming implementation. Weekly ingestion is configured in
+contain `.gitkeep` placeholders. Initial Spark staging is implemented; further
+entity parsing, Silver/Gold transformations, database storage, analysis and the
+GUI remain to build. Automatic ingestion is configured in
 GitHub Actions for a self-hosted Linux runner. The runner and persistent storage
 are configured on `spark`; all 25 tests and a full manual CLI ingestion passed
-there. A first Actions execution awaits merging the workflow into `main`.
+there. The workflow is now on `main`, and a full manual Actions run passed.
+Three successful `schedule` runs were verified overnight on 27–28 October.
+The live five-minute test schedule produced runs hours apart; its requested
+interval is not demonstrated by those observations.
 
 Scheduled runs write outside the repository, under the configured absolute
 `DAT535_DATA_ROOT/bronze/entur/` on the school server. That location retains raw
@@ -66,6 +78,8 @@ Run commands from the project root. The existing Python tools have moved into
 python3 -B -m pipeline.ingestion.download_entur_netex --help
 python3 -B -m pipeline.ingestion.generate_provider_dataset --help
 python3 -B -m pipeline.ingestion.poll_entur_netex --help
+python3 -B -m pipeline.ingestion.ingest_local_zip --help
+python3 -B -m pipeline.processing.bronze.xml_to_parquet --help
 python3 -B -m unittest discover -s tests -v
 ```
 
@@ -74,16 +88,23 @@ re-extracted. Process the dates listed in its `metadata/manifest.json` rather th
 scanning the entire project for XML files. Keep original source XML unchanged and
 write derived tables into `data/`.
 
+Manual ZIP imports keep an exact uploaded copy, selected XML and validation
+metadata in a new Bronze run. A shared `_manual_ingestions.sqlite3` metadata
+index detects repeated manual uploads. See [manual ingestion](manual_ingestion.md).
+The new manual path passed all 40 ingestion tests locally on Python 3.11 and
+3.14; the real January ZIP and a repeat upload were also checked locally.
+
 Developer A's main implementation area is `pipeline/processing/` and
 `pipeline/analysis/`. Developer B's main areas are `pipeline/ingestion/`,
 `pipeline/storage/`, `app/`, `config/`, and `scripts/`. Both contribute to Silver
 and its tests, as described in the project plan.
 
 Current acquisition code uses the Python standard library and runs directly from
-the project root without package installation. Introduce a dependency file when
-PySpark, Streamlit, and the chosen database driver are needed. Configuration
+the project root without package installation. Spark processing dependencies are
+listed in `requirements-processing.txt`; the new staging job requires PySpark
+4.2.0 and Java 17 or newer. Streamlit and database drivers remain to add. Configuration
 loading, database storage, downstream orchestration and GUI execution are still
-planned work. See [weekly ingestion](scheduled_ingestion.md) for the implemented
+planned work. See [automatic ingestion](scheduled_ingestion.md) for the implemented
 schedule and persistent server storage.
 
 Audit reports describe the project at the time of each investigation. Historical

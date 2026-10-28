@@ -102,6 +102,13 @@ Weeks 2–3 · Developer B
 
 Done when: Both manual ingestion and repeated API polling can write raw data to Bronze without creating duplicate logical ingestions.
 
+Implemented on 28 October: manual KOL + AKT ZIP intake through
+`pipeline.ingestion.ingest_local_zip`, including retained original uploads,
+CRC/XML/reference checks and repeat-upload detection. See
+[manual ingestion](manual_ingestion.md). The GUI upload interface and shared
+duplicate detection across API polling and manual intake remain open, so this
+epic is not complete yet.
+
 ### EPIC 04 — Bronze and NeTEx parsing
 
 User story: As a data engineer, I want to preserve source records and convert complex XML into structured staging data so that they can be processed reliably using PySpark.
@@ -119,6 +126,13 @@ Weeks 2–3 · Developer A, with B integrating the ingestion paths
 | T26     | Test record counts and parser failures                      | Both  |
 
 Done when: At least one complete Kolumbus and Agder snapshot is transformed into structured records, with the original archive preserved and all output rows traceable to their source.
+
+First projection implemented on 28 October: direct Spark 4 XML reads and Parquet
+for provider CompositeFrames, lines, service journeys and ordered passing times.
+Source hashes, parent frame IDs/versions and occurrence indices are retained.
+See [XML-to-Parquet processing](xml_to_parquet.md). Structured routes, journey
+patterns, stops and calendar definitions remain to implement; this epic is not
+complete yet.
 
 ## Phase 2 — Silver and historical analytics
 
@@ -189,7 +203,7 @@ Weeks 3–5 · Developer B
 
 | Task ID | Task                                                    | Owner |
 | ------- | ------------------------------------------------------- | ----- |
-| T49     | Configure weekly GitHub Actions ingestion on the school Linux runner | B     |
+| T49     | Configure push-triggered and scheduled GitHub Actions ingestion on the school Linux runner | B     |
 | T50     | Configure periodic API polling                          | B     |
 | T51     | Configure weekly snapshot comparison and reconciliation | B     |
 | T52     | Orchestrate Bronze → Silver → Gold dependencies         | B     |

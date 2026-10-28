@@ -315,3 +315,163 @@ The separate existing-ZIP upload requirement also remains to implement and
 test for both KOL and AKT.
 
 
+26–27 October 2026 - The Actions job works, but the timer is not confirmed
+
+We merged the ingestion setup into main and ran the complete workflow through
+the Run workflow button. It passed on dat535-spark, including all 25 tests,
+the real download, extraction, reference checks and report upload. That run
+is 40388358483. Its manifest says workflow_dispatch, so we cannot use it as
+proof that the weekly timer works.
+
+We tried temporary cron checks and simpler workflows on both our school
+runner and a GitHub-hosted runner. The simple workflows also passed manually.
+By the afternoon of 27 October, the run history still contained no schedule
+events. We did not establish why. The troubleshooting went on too long and
+repeated probes stopped giving us new information.
+
+We removed the temporary workflows and kept only the Monday 08:23 UTC timer.
+Local copies of the probes and a short verification record are in the ignored
+audit notes. The automatic ingestion requirement is still open. The raw data
+was not changed or deleted during these checks.
+
+
+27 October 2026 - Changing collection to hourly
+
+We changed the GitHub Actions cron from Monday mornings to every hour at
+minute 23, using 23 * * * *. The source selection is still yesterday in Oslo.
+This changes how often we try ingestion, not how often Entur publishes a new
+daily archive. Without cross-run duplicate detection, repeated runs can save
+the same archive again. We still need a real schedule event to confirm that
+the automatic trigger works.
+
+
+
+We then adjusted the hourly trigger to minute 45, using 45 * * * *.
+
+The :45 trigger also produced no scheduled run. We changed it to the top
+of every hour, 0 * * * *. The missing scheduler events are still unresolved.
+
+27 October 2026 - Checking whether an environment was missing
+
+We checked the live workflow and repository settings. Actions was enabled,
+the workflow was active on main, and dat535-spark was online and idle. The
+workflow has no environment requirement. GitHub still reported zero schedule
+runs. We disabled and re-enabled this workflow once as a diagnostic reset and
+confirmed it was active again at 16:04 UTC. The hourly :00 schedule stays the
+same. This reset is not proof that scheduling works.
+
+
+27 October 2026 - An automatic push run finally gives us clearer evidence
+
+We added a push trigger restricted to main. Publishing the workflow change
+started run 40537981353 automatically, without pressing Run workflow. GitHub
+records its event as push. The job ran on dat535-spark for about 52 seconds and
+passed the tests, download, extraction, validation and report upload.
+
+We downloaded the report and checked its manifest too. It records push and the
+correct runner, with 532 XML files from the 26 October archive. Ingestion was
+complete_with_warnings because the source contains 65 repeated AKT ID/version
+occurrences. Those records were kept unchanged.
+
+This confirms the automatic push path works. The missing cron runs remain a
+separate unresolved trigger problem. We kept the hourly :00 cron expression
+and documented the push trigger. No existing raw data was deleted.
+
+We changed the hourly cron to minute 17, using 17 * * * *. The push-to-main
+trigger stays enabled. This timing change still needs a real schedule run
+to verify the cron trigger.
+
+
+28 October 2026 - We finally have real scheduled runs
+
+We left a five-minute cron on main overnight and checked the run history in
+the morning. There were three scheduled runs, all successful: 21:51 on the
+27th, then 01:05 and 06:28 on the 28th, using Oslo time. They were hours apart,
+so this does not show that the requested five-minute interval is reliable.
+
+The jobs started about two seconds after GitHub created each run and finished
+in roughly 53 seconds on dat535-spark. We downloaded the latest report as well.
+Its manifest says schedule, with 532 XML files from the 27 October archive.
+Provider reference checks passed, and the 65 repeated AKT ID/version records
+were kept as source warnings. The tests, ingestion and report upload all passed.
+
+We can now demonstrate automatic scheduled ingestion for the project. We still
+do not know why schedule delivery was so sparse. GitHub documents possible
+delays and dropped runs, but that alone does not establish our particular cause.
+The five-minute setting on main was not changed during this check. No raw data
+was deleted. The verification summary is saved in the ignored audit notes.
+
+
+28 October 2026 - Adding the missing manual ZIP intake
+
+We moved on from the timer investigation and built a proper manual import
+command for both KOL and AKT. The earlier tools could download and filter data,
+but the future upload screen still needed a backend for an existing ZIP.
+
+The new ingest_local_zip module accepts either a national archive or one of our
+selected KOL + AKT ZIPs. We require the claimed source date rather than guessing
+it from a filename. It keeps an exact uploaded copy and reuses our extraction,
+XML and reference checks. It does not clean or rewrite the original XML.
+
+We added a small SQLite catalog for successful manual imports. The same ZIP
+bytes, date and providers now count as a repeat upload, even if the file has
+been renamed. A repeat gets a metadata record pointing at the validated first
+import rather than another XML extraction. Concurrent calls are serialized,
+failed imports are not registered as successes, and damaged previous outputs
+are not silently reused. This catalog is just ingestion bookkeeping; it is not
+our future transport analytics database.
+
+All 40 tests pass on local Python 3.11 and 3.14. We also imported the real January
+ZIP: 541 XML files and 1,200,320 provider reference occurrences, with no missing
+provider references or same-file version failures. Repeating that upload gave
+duplicate and created only metadata. The original January ZIP hash and the
+first import's manifest stayed unchanged. The local verification record is in
+audit/2026-10-28/manual_zip_ingestion_verification.json.
+
+The code and usage notes are local work for now, not a deployment to spark.
+Manual duplicate checks do not yet stop repeated API downloads or recognize
+repacked ZIPs that contain the same XML. The GUI, entity parser and Silver
+transformations are still ahead. We did not change the live scheduler or delete
+any raw data while building this piece.
+
+
+28 October 2026 - Our first real Spark XML-to-Parquet processing test
+
+We checked the school environment and it has Spark 4.2.0. XML reading is built
+in there, so we can let Spark read NeTEx directly and write Parquet. We added a
+processing requirements file and used a separate local virtual environment with
+the same Spark version and Java 17 for testing.
+
+We read CompositeFrame first instead of jumping directly to every child tag.
+That gives us parent frame IDs and versions before expanding lines, service
+journeys and passing times into separate datasets. We kept occurrence indices
+and the original IDs, references, versions, times and day offsets. Nothing gets
+deduplicated during this step. The raw XML remains in Bronze.
+
+The small KOL + AKT test passed. The full January test then caught a filename
+URI-encoding issue in our source lookup. We fixed that and checked paths with
+spaces, plus signs, commas and Unicode too. The failed attempt was kept.
+
+The successful full run processed 537 provider line XML files and wrote 537
+frames, 537 lines, 25,289 service journeys and 768,701 passing times. Spark read
+each Parquet dataset back, and the counts matched the Bronze reports. The XML
+hashes before and after were unchanged. Conversion took about 28 seconds after
+setup. All 46 tests pass with the actual Spark reader and writer.
+
+This is our first staging projection, not Silver. The four shared documents,
+national stop definitions, structured routes, journey patterns and calendars
+still need their own projections. Some other child content is kept as Spark
+wildcard fragments, but those are not exact original XML containers; the source
+files remain the authority. The successful test output is under
+data/staging/entur/january-2026-provider-files-verified, with details in
+docs/xml_to_parquet.md. The code is still local work and has not been deployed
+to spark or added to the ingestion workflow.
+
+
+28 October 2026 - Preparing the tested work for the server
+
+This commit brings together the manual ZIP intake, Spark XML-to-Parquet staging,
+their tests and the updated usage notes. All 46 tests passed, and the January
+provider conversion was checked locally. We kept main's current five-minute
+cron setting when bringing the development branch up to date. The next server
+test needs the new code pulled into the cloned dat535-project first.

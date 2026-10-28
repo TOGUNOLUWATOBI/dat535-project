@@ -1,10 +1,15 @@
-# Weekly ingestion on the school Linux server
+# Automatic ingestion on the school Linux server
 
 The historical January–September 2026 dataset is our starting data. The workflow
 in [ingest-netex.yml](../.github/workflows/ingest-netex.yml) collects new data
-**every Monday at 08:23 UTC**, using Sunday's dated Entur archive. In Norway the
-scheduled time is 09:23 in winter and 10:23 in summer. Using the previous day
-avoids depending on the completion time of that morning's export.
+using the previous day's dated Entur archive in Europe/Oslo. The live workflow
+on `main` currently uses `*/5 * * * *` as a five-minute scheduler test. Using the previous day avoids
+depending on the completion time of that morning's export.
+
+Every push to `main` also triggers full ingestion. The push trigger was verified
+on 27 October; scheduled ingestion was verified overnight on 27–28 October.
+The observed scheduled runs were hours apart, so a reliable five-minute
+execution interval has not been demonstrated.
 
 GitHub handles the timer and sends the job to a **self-hosted Linux runner on
 the school server**. The server executes the Python command and keeps the data
@@ -38,9 +43,72 @@ ingestion tests passed on the server. A live metadata-only check for the
 `/srv/dat535/data/bronze/entur/setup-check-20261024/metadata/manifest.json`.
 The existing `group04` runner on the same server remains active.
 
-The ingestion code is pushed on `ft/initial-setup-plus-initial-data-finding`.
-It still needs merging into `main` before the first GitHub Actions run. Full
-manual command execution on the server has passed, as described below.
+The ingestion setup was merged into `main` on 26 October via
+[PR #1](https://github.com/TOGUNOLUWATOBI/dat535-project/pull/1). Full manual
+command execution on the server and a manual GitHub Actions run have passed.
+
+## GitHub Actions verification — 26–27 October 2026
+
+The complete workflow was dispatched through GitHub Actions on `main` and
+succeeded on `dat535-spark`: [manual Actions run 40388358483](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40388358483).
+The job ran from 19:37:16 to 19:38:08 UTC. Storage preflight, checkout, all 25
+tests, source acquisition, XML/reference validation and report upload passed.
+
+The saved manifest records `github_event_name=workflow_dispatch` and
+`runner_name=dat535-spark`. It contains the 25 October snapshot: 532 XML files,
+399,331,448 provider XML bytes and 1,269,673 provider reference occurrences.
+There were zero unresolved provider references and zero same-file version
+failures. The source's 65 repeated AKT ID/version occurrences were preserved as
+warnings, giving ingestion status `complete_with_warnings`.
+
+Automatic scheduling was still unverified during the checks on 27 October, with no
+`event=schedule` runs. Temporary five-minute and single-date probes did not
+produce a scheduled run. Minimal controls on both the school runner and a
+GitHub-hosted runner passed when dispatched manually, but neither received a
+scheduled event. This establishes where the evidence stops; it does not prove
+the underlying cause is a GitHub service fault.
+
+The temporary probe workflows have been removed from `main` and archived
+outside the local workflow directory. On 27 October the production schedule was
+changed from Mondays to hourly at the user's request, then to a five-minute
+test directly on `main`. No automatic
+downloads were observed during the earlier checks, and no raw data was removed.
+A manual dispatch proves that the
+Actions job executes, but a successful run with `event=schedule` is still
+needed to confirm automatic ingestion. Both event type and runner name are
+recorded in ingestion manifests.
+
+On 27 October we added `push: branches: [main]`. Publishing that workflow change
+automatically started [run 40537981353](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40537981353)
+with `event=push`, at commit `c4fdda51e9bf043562eee53fb5a05fb2788835c9`.
+The job ran on `dat535-spark` from 16:08:39 to 16:09:31 UTC and all steps passed,
+including tests, full ingestion and report upload. Its downloaded manifest
+independently records `github_event_name=push`, the 26 October snapshot,
+532 XML files and ingestion status `complete_with_warnings`. The 65 repeated
+AKT ID/version occurrences were preserved as source warnings. This verifies
+automatic ingestion through a push event; a successful cron run was still
+needed at that point.
+
+## Scheduled ingestion verified — 28 October 2026
+
+The overnight history contains three successful runs with `event=schedule`:
+27 October at 21:51, and 28 October at 01:05 and 06:28, all in Europe/Oslo.
+Each job started about two seconds after its run was created and took roughly
+53 seconds on `dat535-spark`. These recorded jobs were not waiting on the runner.
+
+The latest [scheduled run 40638229520](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40638229520)
+passed all steps. Its downloaded manifest independently records
+`github_event_name=schedule`, the 27 October snapshot and 532 XML files.
+Reference validation found no unresolved provider references or same-file
+version failures. The 65 repeated AKT ID/version occurrences were preserved as
+warnings, resulting in `complete_with_warnings`.
+
+This confirms automatic scheduled ingestion. It does not confirm delivery at
+the requested five-minute interval: the observed runs were hours apart.
+GitHub documents possible scheduler delays and dropped runs under load, but
+these observations do not establish the cause of this repository's sparse
+schedule delivery. A small verification record is saved in
+`audit/2026-10-28/actions_scheduled_verification.json`.
 
 ## Full manual CLI test — 24 October 2026
 
@@ -76,9 +144,10 @@ separate, and full XSD/calendar validation is still outside these checks.
 Evidence is saved on the server as
 `metadata/manual_ingestion_test.json` inside that run. A small local copy is at
 [`audit/2026-10-24/manual_ingestion_test.json`](audit/2026-10-24/manual_ingestion_test.json).
-This evidence covers the manual CLI. A first GitHub Actions dispatch remains
-pending the workflow reaching `main`; importing an existing ZIP through a new
-KOL + AKT upload interface has not been tested here.
+This evidence covers the manual CLI. The later manual GitHub Actions dispatch
+also passed, as recorded above. A later existing-ZIP CLI/service was implemented
+and tested locally on 28 October; see [manual ZIP ingestion](manual_ingestion.md).
+The GUI upload interface is still to build.
 
 To check the runner from a shell on `spark`:
 
@@ -126,15 +195,15 @@ It must be powered on with the runner service online to execute the job. Without
 an available runner, GitHub queues the job; it does not run it on another school
 machine without matching labels. See [runner routing and connectivity](https://docs.github.com/en/actions/reference/runners/self-hosted-runners).
 
-## Enable the weekly workflow
+## Enable the automatic workflow
 
-1. Merge the ingestion workflow, Python module and tests from
-   `ft/initial-setup-plus-initial-data-finding` into the default branch, `main`.
+1. Keep the ingestion workflow, Python module and tests on the default branch,
+   `main`. The initial setup has already been merged there.
 2. In **Actions**, open **Ingest Entur NeTEx**, then **Run workflow**. Leave the
    date blank to use yesterday in Oslo. Choose `check_only` for a small metadata
    check first, then run normally to collect and validate an actual snapshot.
 3. Check the run's logs, server output directory and downloadable report.
-   Subsequent weekly runs use the same command automatically. No Entur API key
+   Subsequent scheduled runs use the same command automatically. No Entur API key
    is needed. Runner registration and the storage variable must be configured
    before the first run.
 
@@ -169,7 +238,7 @@ fatal and retain the evidence. GitHub concurrency prevents overlapping runs.
 
 ## Persistent storage
 
-With `DAT535_DATA_ROOT=/srv/dat535/data`, each weekly execution writes:
+With `DAT535_DATA_ROOT=/srv/dat535/data`, each execution writes:
 
 ```text
 /srv/dat535/data/
@@ -199,9 +268,10 @@ it to Git. The runner and storage setup above has been completed on the server.
 Each workflow execution is a new observation, named by run ID and attempt. A
 manual rerun can collect the same payload again. There is no cross-run duplicate
 lookup yet. The content-based `ingestion_id` lets later database/storage work
-recognize identical national payloads for the same provider selection. A weekly
-schedule captures one observation each week; it does not backfill every day or
-identify the exact date of a change between observations.
+recognize identical national payloads for the same provider selection. The
+test schedule still requests yesterday's dated archive, so it can download
+and retain that same archive repeatedly within a day. It does not backfill
+missed days or provide source changes every five minutes.
 
 ## Run the same command locally
 
@@ -239,5 +309,6 @@ python3 -B -m pipeline.ingestion.poll_entur_netex --check-only \
 The unit tests use small ZIP fixtures for full acquisition, filtering and
 reference validation, including transient failures. They passed locally and on
 the school server. A full manual CLI ingestion of the 23 October archive also
-passed on `spark`, with the warnings recorded above. A complete run through
-GitHub Actions still needs to be verified after merging the workflow into `main`.
+passed on `spark`, with the warnings recorded above. A complete manual run
+through GitHub Actions also passed. Automatic cron verification is tracked in
+the Actions verification section above.
