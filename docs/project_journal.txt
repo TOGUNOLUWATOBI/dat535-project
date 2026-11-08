@@ -314,4 +314,28 @@ the Run workflow button working, since the workflow still needs to reach main.
 The separate existing-ZIP upload requirement also remains to implement and
 test for both KOL and AKT.
 
+8 November 2026 - Clearing national archives and fixing scheduled retention
+
+The server was down to 219 MiB free. The user chose to remove fetched national
+ZIPs without a Google Drive backup if the exact originals could currently be
+downloaded again. We checked each saved Entur URL and generation with a HEAD
+request, matching its size and MD5. We also checked the local national SHA-256,
+the selected ZIP checksum/CRCs and all extracted XML hashes against lineage.
+Only completed, validated ingestions were eligible.
+
+We removed 21 national ZIP paths, including the nine monthly source archives.
+Some repeated runs already shared hardlinks, so those paths did not each free
+a full archive's worth of space. Free storage rose from 228,794,368 bytes to
+4,317,605,888 bytes. XML, selected ZIPs, metadata and processed data remain.
+Manifests now record the removals and their cleanup audit. Failed/incomplete
+downloads were not included in this cleanup, and no Drive upload is claimed.
+
+Scheduled ingestion now passes --remove-national-after-validation and checks
+for 2 GiB free before starting. The CLI keeps its explicit opt-in cleanup flag;
+failed validation or download checks leave the fetched source intact. All 28
+ingestion tests passed under Python 3.11, including successful cleanup, failed
+validation/source preservation and low-space rejection. Workflow YAML and shell
+syntax checks also passed. Manual access to a remote source today is not a
+promise that Entur will retain that source forever.
+
 

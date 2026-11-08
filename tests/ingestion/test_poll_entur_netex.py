@@ -136,7 +136,7 @@ class ScheduledIngestionTests(unittest.TestCase):
         self.identity.update(size=str(len(payload)), md5Hash=base64.b64encode(hashlib.md5(payload).digest()).decode("ascii"))
         with patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()), \
                 self.assertRaisesRegex(RuntimeError, "Provider reference validation failed"):
-            poller.ingest_snapshot(self.day, self.output)
+            poller.ingest_snapshot(self.day, self.output, remove_national_after_validation=True)
         result = self.manifest()
         self.assertEqual(result["status"], "failed")
         self.assertTrue((self.output / result["national_zip"]).exists())
@@ -157,6 +157,36 @@ class ScheduledIngestionTests(unittest.TestCase):
         self.assertEqual(poller.previous_source_day(datetime(2026, 10, 22, 23, 30, tzinfo=timezone.utc)), date(2026, 10, 22))
         self.assertEqual(poller.previous_source_day(datetime(2026, 3, 29, 1, 30, tzinfo=timezone.utc)), date(2026, 3, 28))
         self.assertEqual(poller.previous_source_day(datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)), date(2025, 12, 31))
+
+    def test_requested_cleanup_removes_only_validated_national_zip(self):
+        with patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()):
+            result = poller.ingest_snapshot(self.day, self.output, remove_national_after_validation=True)
+        self.assertEqual(result['status'], 'complete')
+        self.assertTrue(result['national_removed'])
+        self.assertFalse((self.output / result['national_zip']).exists())
+        self.assertEqual(result['source_sha256'], hashlib.sha256(self.source.read_bytes()).hexdigest())
+        self.assertTrue((self.output / result['combined_zip']).is_file())
+        lineage = json.loads((self.output / 'metadata/lineage.json').read_text())
+        self.assertTrue(all((self.output / item['xml_path']).is_file() for item in lineage))
+
+    def test_cleanup_option_never_removes_a_failed_source(self):
+        self.identity['md5Hash'] = 'incorrect'
+        with patch('urllib.request.urlopen', side_effect=lambda *a, **k: self.http_response()), \
+                self.assertRaisesRegex(RuntimeError, 'Source size/checksum mismatch'):
+            poller.ingest_snapshot(self.day, self.output, remove_national_after_validation=True)
+        result = self.manifest()
+        self.assertFalse(result['national_removed'])
+        self.assertTrue((self.output / result['national_zip']).exists())
+
+    def test_low_disk_stops_full_download_but_allows_availability_checks(self):
+        with patch.object(poller.shutil, 'disk_usage', return_value=type('Space', (), {'free': 100})()), \
+                patch.object(poller, 'download') as download, self.assertRaisesRegex(RuntimeError, '2 GiB'):
+            poller.ingest_snapshot(self.day, self.output)
+        download.assert_not_called()
+        self.assertEqual(self.manifest()['status'], 'failed')
+        with patch.object(poller.shutil, 'disk_usage', return_value=type('Space', (), {'free': 100})()):
+            result = poller.ingest_snapshot(self.day, self.root / 'check', check_only=True)
+        self.assertEqual(result['status'], 'source_available')
 
 
 if __name__ == "__main__":
