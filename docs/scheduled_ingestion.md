@@ -152,8 +152,9 @@ without repository activity. See [GitHub's schedule documentation](https://docs.
    Store original XML and a compact ZIP without rewriting XML.
 5. Reuse our XML parsing, publication-date and provider reference checks. Record
    source repeats as warnings; missing provider references fail the run.
-6. Keep national downloads, selected XML/ZIP and metadata on the school server,
-   including failed or interrupted runs. Upload a copy of the report to GitHub.
+6. Remove the fetched national ZIP only after extraction and validation pass.
+   Keep selected XML/ZIP, metadata, source URL, generation and checksums.
+   Failed or interrupted sources are retained. Upload a copy of the report to GitHub.
    Failed validation marks the server manifest as failed and fails the job;
    downstream processing must accept only `complete` or `complete_with_warnings`
    manifests.
@@ -175,16 +176,20 @@ With `DAT535_DATA_ROOT=/srv/dat535/data`, each weekly execution writes:
 /srv/dat535/data/
 └── bronze/entur/run-RUN_ID-ATTEMPT/
     ├── metadata/       Manifest, source metadata, lineage and validation report
-    ├── national/       Original national ZIP and any interrupted attempts
+    ├── national/       Failed/interrupted sources; successful ZIP removed after validation
     ├── xml/DATE/       Unmodified KOL + AKT XML and national stops
     └── zip/            Compact copy of the selected XML
 ```
 
 A metadata-only check creates just `metadata/`; it does not claim ZIP or XML
 validation. These server directories are retained across runs and reboots,
-subject to the school's disk and mount configuration. The workflow does not
-delete data or apply a retention period to server files. Storage capacity,
-backups and any later retention policy still need to be arranged with the school.
+subject to the school's disk and mount configuration. Successful scheduled runs
+remove their national ZIP after validation, recording `national_removed=true`.
+Selected XML/ZIP and metadata have no automatic expiry. Full ingestion checks
+for 2 GiB free before checkout/download. Storage capacity and backups still need
+to account for growth in selected data. A removed national ZIP can currently
+be re-downloaded from its saved source URL/generation while Entur retains it;
+this is not a separately verified Google Drive backup.
 
 The only GitHub artifact is `entur-report-RUN_ID-ATTEMPT`, retained for 30 days.
 It contains a copy of the metadata, which also stays on the server. Raw national
@@ -224,6 +229,8 @@ RUN/
 
 For a particular source day, use `--date YYYY-MM-DD`. For a custom destination,
 use `--output PATH` with a new directory. Existing output directories are refused.
+Add `--remove-national-after-validation` to discard the national ZIP after a
+successful run. Without that option, manual polling retains the national ZIP.
 Paths in the manifest and lineage are relative to this run directory. Keep the
 folders together when copying a run. To restore loose XML from its compact copy,
 extract the selected ZIP into `xml/DATE/`.

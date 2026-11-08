@@ -75,8 +75,9 @@ reproduced into a new directory rather than resumed as a working build.
 
 ## Weekly ingestion
 
-GitHub Actions is configured to collect KOL + AKT and shared reference XML every
-Monday at **08:23 UTC**, using Sunday's archive. GitHub triggers the job; a
+GitHub Actions collects KOL + AKT and shared reference XML at **08:23 UTC on days
+1, 4, 7, and so on each month**, using the previous day's archive. The sequence
+resets monthly. GitHub triggers the job; a
 **self-hosted Linux runner on the school server** executes it. A manual
 **Run workflow** option is included. See [runner setup, storage and validation details](docs/scheduled_ingestion.md).
 
@@ -90,7 +91,11 @@ Local development runs default to `data/bronze/entur/`. Scheduled runs use
 Set the repository variable `DAT535_DATA_ROOT` to an existing writable server
 directory, and register the runner with labels `self-hosted`, `linux`, `dat535`.
 Raw data stays on the server; only a report copy is uploaded as a GitHub artifact.
-No automatic server-data deletion is configured.
+Scheduled runs remove the fetched national ZIP after successful extraction and
+validation. Selected raw XML, the selected ZIP, checksums and source generation
+remain. Failed sources are retained for inspection. Full ingestion requires
+at least 2 GiB free. For the same cleanup in a manual polling command, add
+`--remove-national-after-validation`; without that flag the CLI keeps the national ZIP.
 
 ## Verification
 
