@@ -591,3 +591,34 @@ checks for 2 GiB before full ingestion and processing, rather than filling the
 disk. We will need more persistent storage for continued new snapshots. The
 new Actions processing step has passed workflow validation locally; a live
 Actions run and publication to main remain to verify.
+
+2 November 2026 - Keeping the original archives in Google Drive
+
+The school disk filled up after more scheduled ingestions. We want to keep the
+original national ZIPs and use Google Drive for the cloud archive. The upload
+has not been done or verified yet. We should record the snapshot date, source
+generation, original filename, size, checksum and Drive file ID once each
+upload is checked. Different monthly snapshots have different national ZIPs;
+one January ZIP would not back up the other months. The first upload's scope
+is still being clarified. Existing local raw files stay intact for now.
+
+8 November 2026 - User chose source re-downloads instead of a Drive backup
+
+The user decided we could delete the fetched national ZIPs if their exact
+originals were currently available to download again. For each completed run,
+we checked the pinned Entur URL, generation, size and MD5, then verified the
+local national SHA-256, extracted XML hashes and selected ZIP checksum/CRCs.
+We removed 21 national ZIP paths. Metadata and its source identities remain,
+with manifest backups and an audit under
+/srv/dat535/data/metadata/cleanup-national-20261108T141654/.
+
+Space rose from 219 MiB to about 4 GiB. A tested fix was published directly to
+main as 0e9fd84: scheduled ingestion now removes the national ZIP only after
+successful extraction and validation, and full ingestion requires 2 GiB free.
+All 28 ingestion tests passed with Python 3.11. The resulting automatic push
+run, 42489361135, ingested the 7 November snapshot and recorded
+national_removed=true; its national ZIP was confirmed absent. After retaining
+that run's selected data, around 3.2 GiB remained free. All 27 historical
+processing stages remain complete, and the server's dirty route-history files
+were not changed. Failed/interrupted source files were left for inspection.
+No Google Drive upload was performed or claimed.
