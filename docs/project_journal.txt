@@ -627,5 +627,17 @@ with almost no shared stops; those now need a minimum stop similarity. The
 178 to 172 replacement has a shorter route and only 46% shared stops, so
 verified mappings are now kept even when the automatic rules miss them.
 Ten new tests cover these cases and a full run on a small three-month network.
-Details and the open questions (the Kolumbus summer renumbering and AKT's
-September T-codes) are in docs/route_history.md.
+Details are in docs/route_history.md.
+
+We then checked the remaining open cases against public sources. Kolumbus'
+notice "Ruteendringer 1. juli 2026" (Bussveien opening) confirms five
+renumberings in the July snapshot: 1 to 9, 4 to 12, old 2 split into new 1
+(Sandnes) and new 4 (Risavika), and old 3 to new 2 (Forus). These are now
+verified mappings, giving eight in total, and all eight matched on the real
+run with every check still passing. Lines A and B had been published since
+January with no departures; they were placeholders for the Bussveien lines
+and became 1 and 2 under the same line IDs. The February AKT dip is the Agder
+winter holiday in week 8: only weekdays 16-20 February drop (about 25%),
+while weekends equal January and March. AKT's T-suffixed bus numbers lose
+the T on continuing lines with unchanged stops; we found no source for what
+the T means, so we only record that they are label changes.

@@ -25,5 +25,50 @@
     "verified": true,
     "verified_by": "ParneetKaurDhanoa",
     "note": "Same AKT news page: Route 56 is discontinued and Route 55 is extended to Odderhei from 22 June 2026. Bus number 55 continues under a new NeTEx line ID (published from the 2026-06-15 snapshot, old ID gone in 2026-07-15). Route 56 (AKT:Line:1056) is a discontinuation, not a renumbering, so it is not listed here. https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx"
+  },
+  {
+    "provider": "KOL",
+    "old_line_id": "KOL:Line:8_1000",
+    "new_line_id": "KOL:Line:8_1109",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 1 Stavanger - Hundvåg blir nå rute 9.' Identical 34 stops (similarity 1.0). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+  },
+  {
+    "provider": "KOL",
+    "old_line_id": "KOL:Line:8_1005",
+    "new_line_id": "KOL:Line:8_1112",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 4 Rosenli - Madlakrossen blir nå rute 12.' Identical 43 stops (similarity 1.0). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+  },
+  {
+    "provider": "KOL",
+    "old_line_id": "KOL:Line:8_1002",
+    "new_line_id": "KOL:Line:8_1001",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 2 Stavanger - Sandnes blir nå rute 1' (on Bussveien). Old line 2 is split; 75% of new line 1's stops were on old line 2, the rest are new Bussveien stops. New line 1 reuses the line ID of placeholder line A (no departures before July). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+  },
+  {
+    "provider": "KOL",
+    "old_line_id": "KOL:Line:8_1002",
+    "new_line_id": "KOL:Line:8_1104",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'rute 2 Stavanger - Risavika blir rute 4.' Second half of the split of old line 2; all of new line 4's stops were on old line 2. https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+  },
+  {
+    "provider": "KOL",
+    "old_line_id": "KOL:Line:8_1004",
+    "new_line_id": "KOL:Line:8_1003",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 3 Stavanger - Forus blir nå rute 2.' All of new line 2's stops were on old line 3. New line 2 reuses the line ID of placeholder line B (no departures before July). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
   }
 ]
