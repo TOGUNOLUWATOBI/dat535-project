@@ -11,7 +11,7 @@ pipeline/                 Python code
   ingestion/              Historical acquisition and scheduled snapshot collection
   processing/             XML-to-Parquet staging; planned Silver and Gold processing
   storage/                Planned database publication
-  analysis/               Planned historical comparisons
+  analysis/               Route history across snapshots (docs/route_history.md)
 app/                      Planned Streamlit GUI
 config/                   Configuration conventions
 scripts/                  Operational notes and future deployment helpers
@@ -25,9 +25,10 @@ See the [full directory tree](docs/directory_structure.md),
 [task plan](docs/task_readme.md), and [project journal](docs/project_journal.txt).
 Historical acquisition and an automatic GitHub Actions workflow for the school's
 self-hosted Linux runner are implemented. Complete snapshot staging and the
-first checkpointed Silver/Gold processing slice are implemented. Historical
-route-change modeling, database publication and the GUI remain to build.
-The runner is online on `spark`; all 57 current tests passed there with
+first checkpointed Silver/Gold processing slice are implemented, and route-change
+history across the nine snapshots is in [route history](docs/route_history.md).
+Database publication and the GUI remain to build.
+The runner is online on `spark`; all 68 current tests passed there with
 PySpark 4.2.0 and a project-specific Java 17 runtime.
 The workflow is published on `main`. Full manual and automatic push-triggered
 Actions ingestion passed on `dat535-spark`: [successful push run](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40537981353).
@@ -130,8 +131,8 @@ duplicate detection is not implemented yet.
 The complete checkpointed processing command and current Silver/Gold contracts
 are documented in [processing pipeline](docs/processing_pipeline.md). It adds
 shared calendar/stop projections, validated joins, quarantine tables and
-reconciled planned-service metrics. Historical route-change modeling and the GUI
-remain to build.
+reconciled planned-service metrics. Route changes across snapshots are described
+in [route history](docs/route_history.md); the GUI remains to build.
 
 The first Spark job reads provider CompositeFrames directly from NeTEx XML and
 writes staging Parquet for frames, lines, service journeys and ordered passing

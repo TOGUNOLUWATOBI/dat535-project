@@ -669,3 +669,53 @@ all 27 complete processing stages, Spark 4.2.0 and the active VS Code version
 remain. The server's uncommitted route-history work was unchanged. The audit
 and original run manifests are under
 /srv/dat535/data/metadata/server-cleanup-20261108T143646/.
+
+9 November 2026 - Route history built and checked against a real change
+
+We added route-change detection across the nine snapshots (EPIC 06, T38-T43,
+T46-T47) in pipeline/analysis/route_history.py, with an inspect tool that
+prints results with stop names. It compares each month with the next and
+records added, retired and renumbered lines, stops added or removed, changed
+stop sequences, departure changes and moved first/last buses. It also keeps
+a versioned (SCD Type 2) history of each line, lists possible renumberings,
+tracks stops that gain or lose service, and links every Gold service date to
+the line version of its snapshot. The run checks itself against Silver and
+Gold: on the real data all 466,493 departures reconciled, every line snapshot
+belonged to exactly one version, and every service date found a version.
+
+The clearest network-wide changes are the July summer timetables (AKT down
+27.6%, Kolumbus down 20.7% in the seven-day window), an AKT-only drop in
+February that probably reflects the winter school holiday (not yet checked),
+and Kolumbus returning in August about 7.6% above June.
+
+We checked the results against AKT's news page "Route changes in Agder from
+22 June and 1 July 2026". Route 56 ends between the June and July snapshots,
+and eight stops that only it served lost all service. Route 55 keeps its
+number under a new line ID and now also serves Odderhei. Route 178 Åseral-Evje
+ends and the new Route 172 plus a Svipp line take over. These three pairs
+are recorded as verified in config/route_renumberings.json; line 56 is a
+discontinuation and is not listed there.
+
+The real data showed two weaknesses in the first version. AKT and Kolumbus
+publish the new line ID one month before the old one disappears, so the
+renumbering check missed bus 55; replacements may now have been published up
+to one snapshot early. Kolumbus also reused bus numbers in July (old line 1
+became 9 while former line A took number 1), which produced same-number pairs
+with almost no shared stops; those now need a minimum stop similarity. The
+178 to 172 replacement has a shorter route and only 46% shared stops, so
+verified mappings are now kept even when the automatic rules miss them.
+Ten new tests cover these cases and a full run on a small three-month network.
+Details are in docs/route_history.md.
+
+We then checked the remaining open cases against public sources. Kolumbus'
+notice "Ruteendringer 1. juli 2026" (Bussveien opening) confirms five
+renumberings in the July snapshot: 1 to 9, 4 to 12, old 2 split into new 1
+(Sandnes) and new 4 (Risavika), and old 3 to new 2 (Forus). These are now
+verified mappings, giving eight in total, and all eight matched on the real
+run with every check still passing. Lines A and B had been published since
+January with no departures; they were placeholders for the Bussveien lines
+and became 1 and 2 under the same line IDs. The February AKT dip is the Agder
+winter holiday in week 8: only weekdays 16-20 February drop (about 25%),
+while weekends equal January and March. AKT's T-suffixed bus numbers lose
+the T on continuing lines with unchanged stops; we found no source for what
+the T means, so we only record that they are label changes.
