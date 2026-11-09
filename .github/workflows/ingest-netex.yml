@@ -89,6 +89,23 @@ jobs:
           fi
           python3 -u -m pipeline.ingestion.poll_entur_netex "${args[@]}"
 
+      - name: Process validated snapshot through Silver and Gold
+        id: process
+        if: steps.ingest.outcome == 'success' && inputs.check_only != true
+        shell: bash
+        run: |
+          bash scripts/run_processing.sh \
+            --manifest "$INGESTION_OUTPUT/metadata/manifest.json" \
+            --data-root "$DAT535_DATA_ROOT"
+
+      - name: Save processing checkpoint report
+        if: always() && (steps.process.outcome == 'success' || steps.process.outcome == 'failure')
+        shell: bash
+        run: |
+          python3 -m pipeline.checkpoints \
+            --state "$DAT535_DATA_ROOT/pipeline_state.sqlite3" \
+            > "$INGESTION_OUTPUT/metadata/processing_checkpoints.json"
+
       - name: Upload a copy of the server's ingestion report
         if: always() && (steps.ingest.outcome == 'success' || steps.ingest.outcome == 'failure')
         uses: actions/upload-artifact@v4

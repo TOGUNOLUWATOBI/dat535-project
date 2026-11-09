@@ -9,7 +9,7 @@ The data describes published planned services.
 ```text
 pipeline/                 Python code
   ingestion/              Historical acquisition and scheduled snapshot collection
-  processing/             Planned Bronze, Silver and Gold processing
+  processing/             XML-to-Parquet staging; planned Silver and Gold processing
   storage/                Planned database publication
   analysis/               Planned historical comparisons
 app/                      Planned Streamlit GUI
@@ -23,11 +23,18 @@ data/                     Local development outputs; server data uses external s
 
 See the [full directory tree](docs/directory_structure.md),
 [task plan](docs/task_readme.md), and [project journal](docs/project_journal.txt).
-Historical acquisition and a weekly GitHub Actions workflow for the school's
-self-hosted Linux runner are implemented. Parsing into tables, PySpark
-transformations, database storage and the GUI remain to be built. The runner is
-online on `spark`; all 25 tests and a full manual CLI ingestion passed there.
-The first GitHub Actions execution awaits the workflow being merged into `main`.
+Historical acquisition and an automatic GitHub Actions workflow for the school's
+self-hosted Linux runner are implemented. Complete snapshot staging and the
+first checkpointed Silver/Gold processing slice are implemented. Historical
+route-change modeling, database publication and the GUI remain to build.
+The runner is online on `spark`; all 57 current tests passed there with
+PySpark 4.2.0 and a project-specific Java 17 runtime.
+The workflow is published on `main`. Full manual and automatic push-triggered
+Actions ingestion passed on `dat535-spark`: [successful push run](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40537981353).
+Scheduled ingestion was also verified overnight on 27–28 October:
+[successful scheduled run](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40638229520).
+The five-minute test schedule produced three successful runs hours apart, so
+the configured interval is not demonstrated by the observed run history.
 
 ## Current dataset
 
@@ -52,6 +59,7 @@ dependencies when the Spark, GUI and database parts are implemented.
 python3 -B -m pipeline.ingestion.generate_provider_dataset --help
 python3 -B -m pipeline.ingestion.download_entur_netex --help
 python3 -B -m pipeline.ingestion.poll_entur_netex --help
+python3 -B -m pipeline.ingestion.ingest_local_zip --help
 ```
 
 To generate a fresh copy, use a **new** output directory:
@@ -73,13 +81,31 @@ working output directory. Existing material is verified against its recorded
 lineage. The already completed, tidied delivery under `kol_agder_2026/` should be
 reproduced into a new directory rather than resumed as a working build.
 
-## Weekly ingestion
+## Manual ZIP ingestion
 
-GitHub Actions collects KOL + AKT and shared reference XML at **08:23 UTC on days
-1, 4, 7, and so on each month**, using the previous day's archive. The sequence
-resets monthly. GitHub triggers the job; a
+Import an existing national or KOL + AKT ZIP without downloading it again:
+
+```sh
+python3 -B -u -m pipeline.ingestion.ingest_local_zip \
+  --source entur_netex_snapshots/kol_agder_2026/zip/KOL_AKT_netex_20260115.zip \
+  --date 2026-01-15
+```
+
+The input is preserved. The new run retains the original ZIP, selected XML,
+checksums, lineage and validation results. Repeated uploads with the same ZIP
+bytes, date and providers refer to the validated first import. See
+[manual ingestion and duplicate handling](docs/manual_ingestion.md).
+
+## Automatic ingestion
+
+The live workflow on `main` requests ingestion at **08:23 UTC on days 1, 4, 7,
+and so on each month** (`23 8 */3 * *`), using the previous day's archive in Oslo.
+This resets at month boundaries rather than keeping an exact 72-hour interval. It collects KOL,
+AKT and shared reference XML. GitHub triggers the job; a
 **self-hosted Linux runner on the school server** executes it. A manual
 **Run workflow** option is included. See [runner setup, storage and validation details](docs/scheduled_ingestion.md).
+
+Every push to `main` also triggers the full ingestion workflow automatically.
 
 ```sh
 python3 -B -m pipeline.ingestion.poll_entur_netex --check-only
@@ -96,6 +122,25 @@ validation. Selected raw XML, the selected ZIP, checksums and source generation
 remain. Failed sources are retained for inspection. Full ingestion requires
 at least 2 GiB free. For the same cleanup in a manual polling command, add
 `--remove-national-after-validation`; without that flag the CLI keeps the national ZIP.
+Repeated runs can retain the same daily archive more than once; cross-run
+duplicate detection is not implemented yet.
+
+## XML to Parquet
+
+The complete checkpointed processing command and current Silver/Gold contracts
+are documented in [processing pipeline](docs/processing_pipeline.md). It adds
+shared calendar/stop projections, validated joins, quarantine tables and
+reconciled planned-service metrics. Historical route-change modeling and the GUI
+remain to build.
+
+The first Spark job reads provider CompositeFrames directly from NeTEx XML and
+writes staging Parquet for frames, lines, service journeys and ordered passing
+times. It retains source/frame context and checks counts against Bronze
+validation and Parquet read-back. See [XML-to-Parquet processing](docs/xml_to_parquet.md)
+for commands, schema scope and remaining projections.
+
+Ingestion uses only the standard library; processing requires PySpark 4.2.0
+(`requirements-processing.txt`) and Java 17 or newer.
 
 ## Verification
 

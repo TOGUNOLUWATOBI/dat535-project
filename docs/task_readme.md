@@ -102,6 +102,13 @@ Weeks 2–3 · Developer B
 
 Done when: Both manual ingestion and repeated API polling can write raw data to Bronze without creating duplicate logical ingestions.
 
+Implemented on 28 October: manual KOL + AKT ZIP intake through
+`pipeline.ingestion.ingest_local_zip`, including retained original uploads,
+CRC/XML/reference checks and repeat-upload detection. See
+[manual ingestion](manual_ingestion.md). The GUI upload interface and shared
+duplicate detection across API polling and manual intake remain open, so this
+epic is not complete yet.
+
 ### EPIC 04 — Bronze and NeTEx parsing
 
 User story: As a data engineer, I want to preserve source records and convert complex XML into structured staging data so that they can be processed reliably using PySpark.
@@ -119,6 +126,16 @@ Weeks 2–3 · Developer A, with B integrating the ingestion paths
 | T26     | Test record counts and parser failures                      | Both  |
 
 Done when: At least one complete Kolumbus and Agder snapshot is transformed into structured records, with the original archive preserved and all output rows traceable to their source.
+
+First projection implemented on 28 October: direct Spark 4 XML reads and Parquet
+for provider CompositeFrames, lines, service journeys and ordered passing times.
+Source hashes, parent frame IDs/versions and occurrence indices are retained.
+See [XML-to-Parquet processing](xml_to_parquet.md). A subsequent complete
+projection adds routes, journey patterns/points, shared calendar definitions,
+scheduled stops, assignments, flexible stops, national stop places and quays.
+The first January run matched all Bronze counts locally. See
+[checkpointed processing](processing_pipeline.md) for schemas, commands and
+validation limits; server verification is recorded separately in the journal.
 
 ## Phase 2 — Silver and historical analytics
 
@@ -145,6 +162,12 @@ Weeks 3–4 · Both developers
 | T37     | Write unit tests for transformations and Spark SQL checks      | Both  |
 
 Done when: The cleaned Silver data is reusable and documented, with passing schema tests, validated joins, and quantitative quality results.
+
+First implementation: file-scoped version-aware joins, calendar expansion,
+signed overnight offsets, flexible-service classification, count reconciliation,
+quality reasons and quarantine outputs. This is a first processing slice;
+timezone/DST timestamps, broader profiling and all remaining special NeTEx
+cases still need assessment against the historical snapshots.
 
 ### EPIC 06 — Historical route change detection
 
@@ -179,6 +202,12 @@ Weeks 4–5 · Developer A
 
 Done when: Gold datasets support comparisons across selected dates and are reconciled against the underlying timetable records.
 
+First implementation: daily planned departures per line, bounded service-window
+summaries, planned stop coverage and reconciliation with eligible Silver
+service occurrences. Route-change/SCD tables and before/after comparisons are
+still open. Default windows are seven days from each snapshot, not complete
+monthly observations.
+
 ## Phase 3 — Automation, GUI and deployment
 
 ### EPIC 08 — Scheduled pipeline orchestration
@@ -189,13 +218,20 @@ Weeks 3–5 · Developer B
 
 | Task ID | Task                                                    | Owner |
 | ------- | ------------------------------------------------------- | ----- |
-| T49     | Configure weekly GitHub Actions ingestion on the school Linux runner | B     |
+| T49     | Configure push-triggered and scheduled GitHub Actions ingestion on the school Linux runner | B     |
 | T50     | Configure periodic API polling                          | B     |
 | T51     | Configure weekly snapshot comparison and reconciliation | B     |
 | T52     | Orchestrate Bronze → Silver → Gold dependencies         | B     |
 | T53     | Add job locking, safe reruns and failure recovery       | B     |
 
 Done when: Scheduled jobs run without manual intervention, and failed upstream processing prevents invalid downstream publication.
+
+The processing CLI now has persistent SQLite stage checkpoints, exclusive
+snapshot locks, implementation/input fingerprints and verified output reuse.
+It chains staging → Silver → Gold and retains failed attempts. The development
+workflow now calls processing after validated ingestion and copies checkpoint
+status into its report artifact. That change must reach `main` and pass an
+automatic run before end-to-end scheduling is claimed complete.
 
 ### EPIC 09 — Streamlit GUI
 
