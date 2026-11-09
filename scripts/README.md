@@ -15,3 +15,8 @@ processing can be run with `bash scripts/run_processing.sh`; see the
 [checkpointed processing instructions](../docs/processing_pipeline.md).
 The development workflow calls this after validated ingestion. Its change must
 reach `main` before automatic runs use it.
+
+Route changes across the completed snapshots are built with
+`bash scripts/run_route_history.sh --data-root /srv/dat535/data` and shown with
+`bash scripts/inspect_route_history.sh --data-root /srv/dat535/data summary`; see
+[route history](../docs/route_history.md).
