@@ -26,6 +26,7 @@ dat535-project/
 │   │   ├── silver/                   build.py joins/quality; calendars.py date rules
 │   │   └── gold/                     build.py planned-service metrics
 │   ├── storage/                      Planned database publication
+│   ├── quality/                      silver_profile.py gate; report.py table; trace.py XML→Gold checks
 │   └── analysis/                     route_history.py changes/versions; inspect_history.py
 ├── app/                              Planned Streamlit GUI
 ├── config/                           Configuration conventions

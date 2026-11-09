@@ -17,10 +17,18 @@ def implementation(*paths):
     return identity([(p, digest(root / p)) for p in paths])
 
 
-def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold", service_from=None, service_to=None):
+QUALITY_THRESHOLDS = "config/quality_thresholds.json"
+
+
+def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold", service_from=None, service_to=None,
+                 thresholds_path=None):
     from pipeline.processing.bronze.snapshot_to_parquet import convert_snapshot
     from pipeline.processing.silver.build import build_silver
     from pipeline.processing.gold.build import build_gold
+    from pipeline.quality.silver_profile import read_thresholds
+    root = Path(__file__).resolve().parent.parent
+    thresholds_path = Path(thresholds_path) if thresholds_path else root / QUALITY_THRESHOLDS
+    thresholds = read_thresholds(thresholds_path)
     data_root = Path(data_root).resolve()
     if data_root.is_relative_to(Path(manifest).resolve().parent):
         raise ValueError("Persistent data root must not be inside the source manifest directory")
@@ -34,7 +42,10 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
                 "staging": implementation("pipeline/processing/bronze/snapshot_to_parquet.py", "pipeline/processing/bronze/netex_schema.py",
                     "pipeline/processing/bronze/xml_to_parquet.py", "pipeline/processing/bronze/staging_sources.py"),
                 "silver": implementation("pipeline/processing/silver/build.py","pipeline/processing/silver/calendars.py"),
-                "gold": implementation("pipeline/processing/gold/build.py"),
+                # The gate code and its thresholds decide whether Gold publishes, so a change to
+                # either rebuilds Gold (Silver is reused).
+                "gold": identity([implementation("pipeline/processing/gold/build.py",
+                                                 "pipeline/quality/silver_profile.py"), thresholds]),
             }
             outputs = {}
             def destination(layer): return data_root / layer / "entur" / selection["snapshot_date"] / key[:16]
@@ -52,7 +63,7 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
             outputs["silver"] = {"path":str(silver),"reused":reused}
             if through == "silver": return outputs
             gold, _, reused = state.execute(key,"gold",silver_sha,versions["gold"],destination("gold"),
-                lambda output:build_gold(spark,silver,output))
+                lambda output:build_gold(spark,silver,output,thresholds))
             outputs["gold"] = {"path":str(gold),"reused":reused}
             return outputs
     finally: state.close()
@@ -69,6 +80,7 @@ def main():
     parser.add_argument("--through",choices=("staging","silver","gold"),default="gold")
     parser.add_argument("--service-from",type=date.fromisoformat)
     parser.add_argument("--service-to",type=date.fromisoformat)
+    parser.add_argument("--quality-thresholds",type=Path,help=f"Gold publication rules (default: {QUALITY_THRESHOLDS})")
     parser.add_argument("--master",default="local[2]")
     args=parser.parse_args()
     spark=None
@@ -88,7 +100,7 @@ def main():
         spark.sparkContext.setLogLevel("WARN")
         for day in days:
             print(json.dumps({"snapshot":str(day),"outputs":run_snapshot(spark,args.manifest,day,args.data_root,args.state,
-                args.through,args.service_from,args.service_to)},indent=2),flush=True)
+                args.through,args.service_from,args.service_to,args.quality_thresholds)},indent=2),flush=True)
         return 0
     except Exception as error:
         print(f"Pipeline failed: {type(error).__name__}: {error}",file=sys.stderr); return 1

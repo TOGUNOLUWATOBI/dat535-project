@@ -1,0 +1,14 @@
+{
+  "description": "Gold publication rules applied to each Silver output per provider (pipeline/quality/silver_profile.py). A rule fires when the metric is above the limit (or below fail_below). Any fail stops Gold; warn publishes and is recorded in the Gold manifest. Rates are fractions. Limits were set after profiling the ten 2026 snapshots, which all have zero quarantine, so any rejection is noticed (warn) and more than 1% stops publication.",
+  "rules": {
+    "journey_quarantine_rate": {"warn": 0.0, "fail": 0.01},
+    "passing_time_quarantine_rate": {"warn": 0.0, "fail": 0.01},
+    "invalid_service_occurrence_rate": {"warn": 0.0, "fail": 0.01},
+    "ambiguous_references": {"warn": null, "fail": 0},
+    "unresolved_references": {"warn": 0, "fail": null},
+    "essential_missing_rate": {"warn": 0.0, "fail": 0.01},
+    "conflicting_definitions": {"warn": 0, "fail": null},
+    "calendar_issues": {"warn": 0, "fail": null},
+    "eligible_service_occurrences_min": {"fail_below": 1}
+  }
+}

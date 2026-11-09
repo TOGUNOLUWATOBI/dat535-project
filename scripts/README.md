@@ -20,3 +20,8 @@ Route changes across the completed snapshots are built with
 `bash scripts/run_route_history.sh --data-root /srv/dat535/data` and shown with
 `bash scripts/inspect_route_history.sh --data-root /srv/dat535/data summary`; see
 [route history](../docs/route_history.md).
+
+Silver quality evidence: `bash scripts/run_quality_report.sh --data-root /srv/dat535/data --markdown docs/quality_report.md`
+writes the before/after table, and `bash scripts/run_quality_trace.sh --data-root /srv/dat535/data`
+traces real journeys from XML to Gold. `bash scripts/run_tests.sh` runs all tests with Spark.
+See [data quality](../docs/data_quality.md).

@@ -101,5 +101,6 @@ chunking.
 
 1. Consumer and main deliverable (proposed above).
 2. Multimodal versus bus-only scope (proposed: multimodal, bus reported separately).
-3. Quality thresholds that stop or warn before Gold is published (see the
-   readiness review, point 4).
+3. Quality thresholds that stop or warn before Gold is published. Proposed and
+   implemented: any rejection warns, more than 1% (or any ambiguous reference)
+   stops. See [data quality](data_quality.md) and `config/quality_thresholds.json`.

@@ -82,21 +82,42 @@ class SnapshotPipelineTests(unittest.TestCase):
         dates=self.spark.read.parquet(str(silver/'journey_service_dates'))
         self.assertEqual(dates.count(),20)
         self.assertEqual(dates.where("service_date='2026-01-16'").count(),0)
-        reconciliation=json.loads((gold/'metadata/manifest.json').read_text())['reconciliation']
+        gold_manifest=json.loads((gold/'metadata/manifest.json').read_text())
+        reconciliation=gold_manifest['reconciliation']
         self.assertEqual(reconciliation['gold_scheduled_departures'],15)
         self.assertEqual(reconciliation['excluded_service_occurrences'],5)
+        self.assertEqual(gold_manifest['quality_gate']['status'],'pass')
+        profile=json.loads((gold/'metadata/quality_profile.json').read_text())
+        self.assertEqual(profile['service']['KOL']['excluded_flexible'],5)
+        self.assertEqual(profile['times']['AKT']['overnight_passing_times'],2)
         repeat=run_snapshot(self.spark,manifest,None,self.root/'data')
         self.assertTrue(all(stage['reused'] for stage in repeat.values()))
         self.assertEqual(result['gold']['path'],repeat['gold']['path'])
-    def test_invalid_times_are_quarantined_and_excluded_from_gold(self):
+    def test_invalid_times_are_quarantined_and_the_quality_gate_stops_gold(self):
         from pipeline.run_snapshot import run_snapshot
-        result=run_snapshot(self.spark,complete_fixture(self.root/'bronze',bad_time=True),None,self.root/'data')
+        manifest=complete_fixture(self.root/'bronze',bad_time=True)
+        # Half of AKT's journeys are quarantined: Gold must not publish internally consistent
+        # totals over what is left, so the default rules stop it.
+        with self.assertRaisesRegex(RuntimeError,'Quality gate failed.*AKT:journey_quarantine_rate'):
+            run_snapshot(self.spark,manifest,None,self.root/'data')
+        failed=next((self.root/'data'/'gold').rglob('metadata/manifest.json'))
+        gate=json.loads(failed.read_text())
+        self.assertEqual((gate['status'],gate['quality_gate']['status']),('failed','fail'))
+        self.assertNotIn('daily_line_service',gate['tables'])
+        # An explicit, recorded decision to accept the losses publishes Gold with a warning.
+        loose=self.root/'loose.json'
+        loose.write_text(json.dumps({'rules':{'journey_quarantine_rate':{'warn':0.0,'fail':1.0},
+            'passing_time_quarantine_rate':{'warn':0.0,'fail':1.0},'invalid_service_occurrence_rate':{'warn':0.0,'fail':1.0},
+            'eligible_service_occurrences_min':{'fail_below':0}}}))
+        result=run_snapshot(self.spark,manifest,None,self.root/'data',thresholds_path=loose)
+        self.assertTrue(result['silver']['reused'])
         silver=Path(result['silver']['path']);gold=Path(result['gold']['path'])
         self.assertEqual(self.spark.read.parquet(str(silver/'quarantine_passing_times')).count(),2)
         self.assertEqual(self.spark.read.parquet(str(silver/'quarantine_journeys')).count(),2)
-        reconciliation=json.loads((gold/'metadata/manifest.json').read_text())['reconciliation']
-        self.assertEqual(reconciliation['gold_scheduled_departures'],5)
-        self.assertEqual(reconciliation['excluded_service_occurrences'],15)
+        gold_manifest=json.loads((gold/'metadata/manifest.json').read_text())
+        self.assertEqual(gold_manifest['quality_gate']['status'],'warn')
+        self.assertEqual(gold_manifest['reconciliation']['gold_scheduled_departures'],5)
+        self.assertEqual(gold_manifest['reconciliation']['excluded_service_occurrences'],15)
 
     def test_ambiguous_unversioned_references_do_not_multiply_source_rows(self):
         from pipeline.processing.silver.build import lookup

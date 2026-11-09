@@ -770,3 +770,32 @@ processing and route history after it, and saves the history checks with the
 run report. 76 tests pass on the server. The draft project definition
 (docs/project_definition.md) records the scope and meanings above and the
 decisions the team still has to agree.
+
+9 November 2026 - Quality evidence and a publication gate (review point 4)
+
+Zero quarantine said only that nothing broke our rules. We added a quality
+profile for every Silver output (pipeline/quality/silver_profile.py): before
+and after volumes, duplicates collapsed, essential and optional fields
+missing, unresolved and ambiguous references, invalid and overnight times,
+calendar issues, and accepted, excluded and rejected service. Gold now
+profiles its Silver input first and applies config/quality_thresholds.json:
+any rejection warns, and more than 1% rejected, any ambiguous reference, or no
+accepted service for a provider stops Gold. Before this, Gold would reconcile
+perfectly with whatever survived Silver. The updated pipeline test shows the
+gate stopping Gold when half of AKT's journeys are broken.
+
+The profile of all ten snapshots changed one rule before we used it.
+ServiceJourney.DepartureTime is empty for almost every journey, because the
+Nordic profile puts times on the passing times, so it is optional, not
+essential. All ten snapshots pass. Nothing was rejected, collapsed or
+unresolved, so Silver's role here is resolution and derivation, not cleaning.
+The evidence shows substantial overnight service (up to 52,210 Kolumbus
+passing times after midnight in one snapshot), many valid journeys that do not
+run in the window, and flexible service that is excluded, not lost. The
+table is in docs/quality_report.md.
+
+We also traced four real February journeys from the source XML, read with the
+Python standard library only, to Silver and Gold: an ordinary journey, an
+overnight journey, a journey whose calendar marks Friday 20 February as not
+available, and a flexible journey. Passing times, operating dates and Gold's
+treatment matched in every case (docs/quality_traces.md, docs/data_quality.md).
