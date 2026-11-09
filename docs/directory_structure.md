@@ -28,7 +28,7 @@ dat535-project/
 │   ├── storage/                      Planned database publication
 │   ├── quality/                      silver_profile.py gate; report.py table; trace.py XML→Gold checks
 │   └── analysis/                     route_history.py changes/versions; inspect_history.py
-├── app/                              Planned Streamlit GUI
+├── app/                              Streamlit Gold explorer (gold_app.py pages, data.py access)
 ├── config/                           Configuration conventions
 ├── scripts/                          run_processing.sh, run_route_history.sh, inspect_route_history.sh
 ├── tests/
