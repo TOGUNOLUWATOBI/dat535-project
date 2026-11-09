@@ -1,0 +1,29 @@
+[
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:178",
+    "new_line_id": "AKT:Line:172",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Route 178 Aseral - Dasvannsdalen - Evje is replaced by new Route 172 from 1 July 2026. Bus 178 (37 stops) ends after the 2026-06-15 snapshot; bus 172 Aseral-Evje (23 stops, published from 2026-06-15) runs from 2026-07-15. Stop similarity is only 0.46 because the route is shorter, so this pair comes from this mapping, not the automatic rules. https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx"
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:9178",
+    "new_line_id": "AKT:Line:9172",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa",
+    "note": "Same AKT news page: Aseral gets AKT Svipp (on-demand) with the new Route 172. The supplementary line 178S Aseral-Evje (published only in the 2026-06-15 snapshot, no fixed departures) continues as SVIPP Aseral-Evje under AKT:Line:9172. https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx"
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:1055",
+    "new_line_id": "AKT:Line:55",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa",
+    "note": "Same AKT news page: Route 56 is discontinued and Route 55 is extended to Odderhei from 22 June 2026. Bus number 55 continues under a new NeTEx line ID (published from the 2026-06-15 snapshot, old ID gone in 2026-07-15). Route 56 (AKT:Line:1056) is a discontinuation, not a renumbering, so it is not listed here. https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx"
+  }
+]

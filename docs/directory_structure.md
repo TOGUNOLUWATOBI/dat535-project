@@ -26,13 +26,14 @@ dat535-project/
 │   │   ├── silver/                   build.py joins/quality; calendars.py date rules
 │   │   └── gold/                     build.py planned-service metrics
 │   ├── storage/                      Planned database publication
-│   └── analysis/                     Planned historical service comparisons
+│   └── analysis/                     route_history.py changes/versions; inspect_history.py
 ├── app/                              Planned Streamlit GUI
 ├── config/                           Configuration conventions
-├── scripts/                          run_processing.sh uses the school Spark/Java environment
+├── scripts/                          run_processing.sh, run_route_history.sh, inspect_route_history.sh
 ├── tests/
 │   ├── ingestion/                    Acquisition/generation regression tests
-│   └── processing/                   Source selection and actual Spark tests
+│   ├── processing/                   Source selection and actual Spark tests
+│   └── analysis/                     Route-history rules and a small full run
 ├── docs/
 │   ├── task_readme.md                 Project scope and task breakdown
 │   ├── project_journal.txt            Running account of decisions and progress
@@ -59,10 +60,10 @@ dat535-project/
 
 Python package directories also contain `__init__.py`. Data output directories
 contain `.gitkeep` placeholders. Complete staging and the first Silver/Gold
-slice are implemented. Route-history modeling, database publication and the
+slice and route history are implemented. Database publication and the
 GUI remain to build. Automatic ingestion is configured in
 GitHub Actions for a self-hosted Linux runner. The runner and persistent storage
-are configured on `spark`; all 57 current tests passed there with Java 17 and
+are configured on `spark`; all 68 current tests passed there with Java 17 and
 PySpark 4.2.0. The ingestion workflow is on `main`, and a full manual Actions run passed.
 Three successful `schedule` runs were verified overnight on 27–28 October.
 The earlier five-minute test produced runs hours apart. The current schedule

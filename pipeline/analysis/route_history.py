@@ -9,7 +9,8 @@ checkpoint registry and compares consecutive snapshots line by line:
 * service-level changes in the snapshot's Gold window (departures, first/last bus);
 * a Type 2 slowly changing dimension of line versions;
 * renumbering candidates, joined with a manually verified mapping file;
-* network stop coverage per snapshot and stops that gained or lost service.
+* network stop coverage per snapshot and stops that gained or lost service;
+* every Gold service date linked to the line version valid in that snapshot (T43).
 
 Run on the school server from the project root (see scripts/run_route_history.sh):
 
@@ -50,7 +51,8 @@ TRACKED = ["public_codes", "names", "transport_modes", "line_kinds", "stop_set_h
 STRUCTURAL = ["line_added", "line_retired", "public_code_changed", "name_changed",
               "transport_mode_changed", "stops_added", "stops_removed", "patterns_changed"]
 DEFAULTS = {"frequency_threshold": 0.2, "min_departure_change": 5,
-            "span_threshold_minutes": 30, "renumber_similarity": 0.6}
+            "span_threshold_minutes": 30, "renumber_similarity": 0.6, "renumber_lookback": 1,
+            "same_code_similarity": 0.2}
 
 
 class HistoryInputError(RuntimeError):
@@ -139,7 +141,7 @@ def load_line_snapshots(spark, inputs):
     """One row per (snapshot, provider, line id) plus pattern and stop detail tables."""
     from functools import reduce
     from pyspark.sql import functions as F
-    lines_all, patterns_all, names_all, checks = [], [], [], []
+    lines_all, patterns_all, names_all, daily_all, checks = [], [], [], [], []
     for item in inputs:
         silver, gold = Path(item["silver"]), Path(item["gold"])
         s_manifest = json.loads((silver / "metadata/manifest.json").read_text())
@@ -182,6 +184,11 @@ def load_line_snapshots(spark, inputs):
             F.min("earliest_departure_seconds").alias("first_departure_seconds"),
             F.max("latest_departure_seconds").alias("last_departure_seconds"))
 
+        daily_all.append(g("daily_line_service").groupBy("provider", F.col("line_entity_id").alias("line_id"), "service_date")
+            .agg(F.sum("scheduled_departures").alias("scheduled_departures"),
+                 F.min("first_departure_seconds").alias("first_departure_seconds"),
+                 F.max("last_departure_seconds").alias("last_departure_seconds"))
+            .withColumn("snapshot_date", day))
         frame = (attrs.join(structure, ["provider", "line_id"], "left")
                  .join(window, ["provider", "line_id"], "left")
                  .withColumn("snapshot_date", day))
@@ -200,7 +207,13 @@ def load_line_snapshots(spark, inputs):
                        "silver_distinct_lines": silver_lines, "gold_lines_without_silver_line": orphans})
 
     union = lambda frames: reduce(lambda a, b: a.unionByName(b), frames)
-    lines = union(lines_all)
+    return (finish_lines(union(lines_all)), union(patterns_all),
+            union(names_all).dropDuplicates(["snapshot_date", "stop_id"]), union(daily_all), checks)
+
+
+def finish_lines(lines):
+    """Fill missing arrays/counts and add the display columns and structure hashes."""
+    from pyspark.sql import functions as F
     lines = (lines
         .withColumn("public_codes", _arr("public_codes")).withColumn("names", _arr("names"))
         .withColumn("transport_modes", _arr("transport_modes")).withColumn("line_kinds", _arr("line_kinds"))
@@ -217,8 +230,7 @@ def load_line_snapshots(spark, inputs):
         .withColumn("pattern_set_hash", F.sha2(F.array_join("pattern_signatures", ","), 256))
         .withColumn("has_conflicting_definitions",
                     (F.size("public_codes") > 1) | (F.size("names") > 1) | (F.size("transport_modes") > 1)))
-    lines = lines.withColumn("attribute_hash", F.sha2(F.to_json(F.struct(*TRACKED)), 256))
-    return lines, union(patterns_all), union(names_all).dropDuplicates(["snapshot_date", "stop_id"]), checks
+    return lines.withColumn("attribute_hash", F.sha2(F.to_json(F.struct(*TRACKED)), 256))
 
 
 def detect_changes(spark, lines, dates, options):
@@ -343,18 +355,53 @@ def build_versions(lines, dates, verified=None):
                                                                   F.col("version_number").cast("string")), 256), 1, 16)))
     if verified is not None:
         # Continuity across a verified renumbering that changed the line ID.
-        links = verified.where("verified AND old_line_id != new_line_id").select(
-            "provider", F.col("new_line_id").alias("line_id"), F.col("old_line_id").alias("renumbered_from_line_id"),
-            F.col("to_snapshot").alias("valid_from")).dropDuplicates(["provider", "line_id", "valid_from"])
-        versions = versions.join(links, ["provider", "line_id", "valid_from"], "left")
+        # The new line may have been published before the old one disappeared, so the link
+        # goes to the new line's version that is current in the snapshot where the old one is gone.
+        # Several old lines merged into one new line are all listed (comma-separated).
+        links = verified.where("verified AND old_line_id != new_line_id").groupBy(
+            F.col("provider").alias("l_provider"), F.col("new_line_id").alias("l_line_id"),
+            F.col("to_snapshot").alias("l_to")).agg(
+            F.concat_ws(",", F.sort_array(F.collect_set("old_line_id"))).alias("renumbered_from_line_id"))
+        joined = versions.join(links, (versions.provider == links.l_provider) & (versions.line_id == links.l_line_id)
+                               & (versions.valid_from <= links.l_to) & (versions.last_observed >= links.l_to), "left")
+        versions = joined.dropDuplicates(["provider", "line_id", "version_number"]).drop("l_provider", "l_line_id", "l_to")
     else:
         versions = versions.withColumn("renumbered_from_line_id", F.lit(None).cast("string"))
     covered = x.select("provider", "line_id", "snapshot_date", "version_number")
     return versions.drop("first_index", "last_index"), covered
 
 
-def renumbering_candidates(spark, transitions, options, mapping_rows):
-    """Possible renumberings/re-identifications, with manual verification joined in."""
+def service_versions(daily, covered, versions):
+    """T43: attach each Gold service date to the line version of its snapshot.
+
+    A service date belongs to the snapshot that published it, so it is joined
+    on (provider, line, snapshot). Inner joins would hide unmatched rows, so a
+    left join is used and the caller checks that every row found a version.
+    """
+    from pyspark.sql import functions as F
+    keys = versions.select("provider", "line_id", "version_number", "version_key", "public_code",
+                           "valid_from", "last_observed")
+    joined = daily.join(covered, ["provider", "line_id", "snapshot_date"], "left").join(
+        keys, ["provider", "line_id", "version_number"], "left")
+    return joined.select("snapshot_date", "service_date", "provider", "line_id", "version_number", "version_key",
+                         F.col("public_code").alias("version_public_code"), "valid_from", "last_observed",
+                         "scheduled_departures", "first_departure_seconds", "last_departure_seconds")
+
+
+def renumbering_candidates(spark, transitions, options, mapping_rows, lines=None, dates=None):
+    """Possible renumberings/re-identifications, with manual verification joined in.
+
+    Operators often publish a replacement line (or a line's new bus number) one
+    snapshot before the old line disappears. A retired line is therefore compared
+    with every line in the next snapshot whose current bus number first appeared
+    at most ``renumber_lookback`` snapshots earlier, not only with lines added in
+    the same transition. ``new_line_since`` records when that number first appeared.
+
+    A shared bus number alone is weak evidence, because operators reuse numbers
+    for different routes (Kolumbus, July 2026: old line 1 became 9 while the
+    former line A took number 1). Same-number pairs therefore also need a stop
+    similarity of at least ``same_code_similarity``.
+    """
     from pyspark.sql import functions as F
     def jaccard(a, b):
         union = F.size(F.array_union(_arr(a), _arr(b)))
@@ -363,23 +410,39 @@ def renumbering_candidates(spark, transitions, options, mapping_rows):
         "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("old_line_id"),
         F.col("line_id").alias("new_line_id"), F.col("public_code_before").alias("old_public_code"),
         F.col("public_code_after").alias("new_public_code"), F.lit("same_line_id_new_code").alias("match_type"),
-        jaccard("stop_ids_before", "stop_ids_after").alias("stop_similarity"))
+        jaccard("stop_ids_before", "stop_ids_after").alias("stop_similarity"),
+        F.col("to_snapshot").alias("new_line_since"))
     retired = transitions.where("status='retired'").select(
         "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("old_line_id"),
         F.col("public_code_before").alias("old_public_code"), F.col("stop_ids_before").alias("old_stops"),
         F.col("transport_modes_before").alias("old_modes"))
-    added = transitions.where("status='added'").select(
-        "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("new_line_id"),
-        F.col("public_code_after").alias("new_public_code"), F.col("stop_ids_after").alias("new_stops"),
-        F.col("transport_modes_after").alias("new_modes"))
-    pairs = retired.join(added, ["from_snapshot", "to_snapshot", "provider"])
+    if lines is None or dates is None:
+        added = transitions.where("status='added'").select(
+            "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("new_line_id"),
+            F.col("public_code_after").alias("new_public_code"), F.col("stop_ids_after").alias("new_stops"),
+            F.col("transport_modes_after").alias("new_modes"), F.col("to_snapshot").alias("new_line_since"))
+    else:
+        lookback = max(1, int(options["renumber_lookback"]))
+        windows = spark.createDataFrame(
+            [(dates[i], dates[i + 1], dates[max(0, i + 1 - lookback)]) for i in range(len(dates) - 1)],
+            ["from_snapshot", "to_snapshot", "earliest"])
+        since = lines.groupBy("provider", "line_id", "public_code").agg(F.min("snapshot_date").alias("new_line_since"))
+        current = lines.join(windows, lines.snapshot_date == windows.to_snapshot).join(
+            since, ["provider", "line_id", "public_code"])
+        added = current.where(F.col("new_line_since") >= F.col("earliest")).select(
+            "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("new_line_id"),
+            F.col("public_code").alias("new_public_code"), F.col("stop_ids").alias("new_stops"),
+            F.col("transport_modes").alias("new_modes"), "new_line_since")
+    pairs = retired.join(added, ["from_snapshot", "to_snapshot", "provider"]).where("old_line_id != new_line_id")
     pairs = pairs.where(F.arrays_overlap(_arr("old_modes"), _arr("new_modes")) | (F.size(_arr("old_modes")) == 0))
     pairs = pairs.withColumn("stop_similarity", jaccard("old_stops", "new_stops"))
     pairs = pairs.withColumn("match_type", F.when(F.col("old_public_code") == F.col("new_public_code"),
                                                   "same_code_new_line_id").otherwise("similar_stops"))
-    pairs = pairs.where((F.col("match_type") == "same_code_new_line_id") | (F.col("stop_similarity") >= options["renumber_similarity"]))
+    threshold = F.when(F.col("match_type") == "same_code_new_line_id", F.lit(float(options["same_code_similarity"]))) \
+                 .otherwise(F.lit(float(options["renumber_similarity"])))
+    pairs = pairs.where(F.col("stop_similarity") >= threshold)
     columns = ["from_snapshot", "to_snapshot", "provider", "old_line_id", "new_line_id", "old_public_code",
-               "new_public_code", "match_type", "stop_similarity"]
+               "new_public_code", "match_type", "stop_similarity", "new_line_since"]
     candidates = same_id.select(*columns).unionByName(pairs.select(*columns))
     schema = "provider string, old_line_id string, new_line_id string, verified boolean, verified_by string, note string, " \
              "mapping_from_snapshot string, mapping_to_snapshot string"
@@ -387,7 +450,34 @@ def renumbering_candidates(spark, transitions, options, mapping_rows):
     candidates = candidates.join(mappings, ["provider", "old_line_id", "new_line_id"], "left")
     candidates = candidates.where(F.col("mapping_to_snapshot").isNull() | (F.col("mapping_to_snapshot") == F.col("to_snapshot")))
     candidates = candidates.withColumn("verified", F.coalesce("verified", F.lit(False))).drop("mapping_from_snapshot", "mapping_to_snapshot")
+    if lines is not None and dates is not None:
+        candidates = candidates.unionByName(_mapped_only(spark, lines, dates, mappings, candidates, jaccard))
     return candidates
+
+
+def _mapped_only(spark, lines, dates, mappings, candidates, jaccard):
+    """Verified mappings the automatic rules did not find (e.g. a replacement with a new number
+    and a shortened route). The operator's announcement is the evidence, so they are added with
+    ``match_type='verified_mapping'`` when the old line exists just before ``to_snapshot`` and the
+    new line exists in it. Mappings without ``to_snapshot`` cannot be placed and stay unmatched."""
+    from pyspark.sql import functions as F
+    pairs = spark.createDataFrame(list(zip(dates[:-1], dates[1:])), ["from_snapshot", "mapping_to_snapshot"])
+    keys = ["provider", "old_line_id", "new_line_id"]
+    missing = mappings.where("verified").join(candidates.select(*keys), keys, "left_anti").join(
+        pairs, "mapping_to_snapshot")
+    old = lines.select("provider", F.col("line_id").alias("old_line_id"), F.col("snapshot_date").alias("from_snapshot"),
+                       F.col("public_code").alias("old_public_code"), F.col("stop_ids").alias("old_stops"))
+    since = lines.groupBy("provider", "line_id", "public_code").agg(F.min("snapshot_date").alias("new_line_since"))
+    new = lines.join(since, ["provider", "line_id", "public_code"]).select(
+        "provider", F.col("line_id").alias("new_line_id"), F.col("snapshot_date").alias("mapping_to_snapshot"),
+        F.col("public_code").alias("new_public_code"), F.col("stop_ids").alias("new_stops"), "new_line_since")
+    found = missing.join(old, ["provider", "old_line_id", "from_snapshot"]).join(
+        new, ["provider", "new_line_id", "mapping_to_snapshot"])
+    return found.select("provider", "old_line_id", "new_line_id", "from_snapshot",
+                        F.col("mapping_to_snapshot").alias("to_snapshot"), "old_public_code", "new_public_code",
+                        F.lit("verified_mapping").alias("match_type"),
+                        jaccard("old_stops", "new_stops").alias("stop_similarity"), "new_line_since",
+                        "verified", "verified_by", "note").select(*candidates.columns)
 
 
 def stop_coverage(lines, stop_names, dates, spark):
@@ -451,7 +541,7 @@ def summaries(lines, transitions, coverage, stop_changes):
 
 
 def read_mappings(path):
-    """Manually verified renumberings: a JSON list (see config/route_renumberings.example.json)."""
+    """Manually verified renumberings: a JSON list (see config/route_renumberings.json)."""
     if path is None or not Path(path).is_file():
         return [], None
     entries = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -498,7 +588,7 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
         return saved
 
     try:
-        lines, patterns, stop_names, input_checks = load_line_snapshots(spark, inputs)
+        lines, patterns, stop_names, daily, input_checks = load_line_snapshots(spark, inputs)
         lines = write("line_snapshots", lines.select(
             "snapshot_date", "provider", "line_id", "public_code", "name", "transport_mode", "public_codes", "names",
             "transport_modes", "line_kinds", "line_occurrences", "has_conflicting_definitions", "journeys_published",
@@ -509,9 +599,11 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
         transitions, changes = detect_changes(spark, lines, dates, options)
         transitions = write("line_transitions", transitions, 2)
         changes = write("line_changes", changes)
-        candidates = write("renumbering_candidates", renumbering_candidates(spark, transitions, options, mapping_rows))
+        candidates = write("renumbering_candidates",
+                           renumbering_candidates(spark, transitions, options, mapping_rows, lines, dates))
         versions, covered = build_versions(lines, dates, candidates)
         versions = write("line_versions", versions)
+        dated = write("line_service_versions", service_versions(daily, covered, versions), 2)
         coverage, stop_changes = stop_coverage(lines, stop_names, dates, spark)
         coverage = write("stop_coverage", coverage, 2)
         stop_changes = write("stop_coverage_changes", stop_changes)
@@ -544,6 +636,13 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
         checks["change_rows_match_transitions"] = expected_events == changes.count()
         if not checks["change_rows_match_transitions"]:
             failures.append("Exploded change rows differ from transition change lists")
+        unversioned = dated.where("version_key IS NULL").count()
+        dated_total = dated.agg(F.coalesce(F.sum("scheduled_departures"), F.lit(0))).first()[0]
+        gold_total = sum(item["gold_departures"] for item in input_checks)
+        checks["service_dates_without_version"] = unversioned
+        checks["service_date_departures"] = {"gold": gold_total, "versioned": int(dated_total)}
+        if unversioned or dated_total != gold_total:
+            failures.append("Gold service dates are not each linked to exactly one line version")
         checks["lines_with_conflicting_definitions"] = lines.where("has_conflicting_definitions").count()
         if mapping_rows:
             matched = candidates.where("verified").select("provider", "old_line_id", "new_line_id").distinct().count()
@@ -638,11 +737,16 @@ def main(argv=None):
     parser.add_argument("--min-departure-change", type=int, default=DEFAULTS["min_departure_change"])
     parser.add_argument("--span-threshold-minutes", type=int, default=DEFAULTS["span_threshold_minutes"])
     parser.add_argument("--renumber-similarity", type=float, default=DEFAULTS["renumber_similarity"])
+    parser.add_argument("--renumber-lookback", type=int, default=DEFAULTS["renumber_lookback"],
+                        help="Snapshots before the removal in which a replacement may already be published")
+    parser.add_argument("--same-code-similarity", type=float, default=DEFAULTS["same_code_similarity"],
+                        help="Minimum stop similarity for an old and new line sharing a bus number")
     parser.add_argument("--master", default="local[2]")
     parser.add_argument("--force", action="store_true", help="Build a new output even if an identical one exists")
     args = parser.parse_args(argv)
     options = {"frequency_threshold": args.frequency_threshold, "min_departure_change": args.min_departure_change,
-               "span_threshold_minutes": args.span_threshold_minutes, "renumber_similarity": args.renumber_similarity}
+               "span_threshold_minutes": args.span_threshold_minutes, "renumber_similarity": args.renumber_similarity,
+               "renumber_lookback": args.renumber_lookback, "same_code_similarity": args.same_code_similarity}
     spark = None
     try:
         from pyspark.sql import SparkSession
