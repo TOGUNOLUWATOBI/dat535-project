@@ -58,7 +58,7 @@ jobs:
           if not root.is_dir() or not os.access(root, os.W_OK | os.X_OK):
               raise SystemExit(f'Create persistent storage writable by the runner account first: {root}')
           if os.environ.get('CHECK_ONLY') != 'true' and shutil.disk_usage(root).free < 2 * 1024**3:
-              raise SystemExit('Full ingestion and processing need at least 2 GiB free; add storage before retrying. No automatic deletion is configured.')
+              raise SystemExit('Full ingestion requires at least 2 GiB free; add storage or clean verified archives before retrying')
           output = root / 'bronze' / 'entur' / f"run-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
               env.write(f'INGESTION_OUTPUT={output}\n')
@@ -80,7 +80,7 @@ jobs:
           CHECK_ONLY: ${{ inputs.check_only }}
         shell: bash
         run: |
-          args=(--output "$INGESTION_OUTPUT")
+          args=(--output "$INGESTION_OUTPUT" --remove-national-after-validation)
           if [[ -n "$SOURCE_DATE" ]]; then
             args+=(--date "$SOURCE_DATE")
           fi
