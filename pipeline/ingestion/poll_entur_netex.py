@@ -1,7 +1,8 @@
 """Collect one new KOL + AKT archive snapshot, locally or from GitHub Actions.
 
 The default source date is yesterday in Europe/Oslo. Each execution gets a new
-output directory; original archives, XML and failed downloads are preserved.
+output directory. Selected XML and failed downloads are preserved. The optional
+cleanup flag removes the national ZIP only after extraction and validation pass.
 """
 
 import argparse
@@ -11,6 +12,7 @@ from http.client import IncompleteRead
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import time
 import urllib.error
@@ -61,7 +63,8 @@ def request_with_retries(operation, attempts, record_failure):
             time.sleep(delay)
 
 
-def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_only=False):
+def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_only=False,
+                    remove_national_after_validation=False):
     """Acquire, filter and validate a single source without changing older data."""
     providers = list(dict.fromkeys(p.upper() for p in providers))
     if not providers or any(not re.fullmatch(r"[A-Z]{3}", p) for p in providers):
@@ -79,6 +82,8 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
         "status": "running", "started_at_utc": utc_now(),
         "snapshot_date": day.isoformat(), "providers": providers,
         "check_only": check_only, "request_failures": [],
+        "national_removed": False,
+        "remove_national_after_validation": remove_national_after_validation,
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
         "github_event_name": os.environ.get("GITHUB_EVENT_NAME"),
@@ -109,6 +114,8 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
         if check_only:
             manifest["status"] = "source_available"
         else:
+            if shutil.disk_usage(output).free < 2 * 1024**3:
+                raise RuntimeError("Full ingestion requires at least 2 GiB free; no archive was downloaded")
             def acquire(attempt):
                 # Separate attempts retain partial bytes and never block a retry
                 # because an earlier download left a .part file behind.
@@ -144,6 +151,12 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
             # Identity is content-based, so downstream storage can recognize the
             # same payload even if another run or archive date observes it again.
             manifest["ingestion_id"] = manifest["source_sha256"] + ":" + ",".join(sorted(providers))
+            # The original XML, selected ZIP, source identity and validation
+            # must be durable before an explicitly requested source cleanup.
+            save_json(manifest_path, manifest)
+            if remove_national_after_validation:
+                raw.unlink()
+                manifest.update(national_removed=True, national_removed_at_utc=utc_now())
         manifest["completed_at_utc"] = utc_now()
         save_json(manifest_path, manifest)
         print(f"{manifest['status']}: {manifest_path}", flush=True)
@@ -161,12 +174,15 @@ def main():
     parser.add_argument("--providers", nargs="+", default=["KOL", "AKT"])
     parser.add_argument("--attempts", type=int, choices=range(1, 6), default=3)
     parser.add_argument("--check-only", action="store_true", help="Check source metadata without downloading the national ZIP")
+    parser.add_argument("--remove-national-after-validation", action="store_true",
+                        help="Remove the fetched national ZIP only after successful extraction and validation")
     args = parser.parse_args()
     day = args.date or previous_source_day()
     run_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
     output = args.output or Path("data/bronze/entur") / run_name
     try:
-        ingest_snapshot(day, output, args.providers, args.attempts, args.check_only)
+        ingest_snapshot(day, output, args.providers, args.attempts, args.check_only,
+                        args.remove_national_after_validation)
     except Exception as error:
         print(f"Ingestion failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
