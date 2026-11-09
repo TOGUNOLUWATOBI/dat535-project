@@ -3,72 +3,176 @@
     "provider": "AKT",
     "old_line_id": "AKT:Line:178",
     "new_line_id": "AKT:Line:172",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa",
-    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Route 178 Aseral - Dasvannsdalen - Evje is replaced by new Route 172 from 1 July 2026. Bus 178 (37 stops) ends after the 2026-06-15 snapshot; bus 172 Aseral-Evje (23 stops, published from 2026-06-15) runs from 2026-07-15. Stop similarity is only 0.46 because the route is shorter, so this pair comes from this mapping, not the automatic rules. https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx"
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Route 178 Aseral - Dasvannsdalen - Evje is replaced by new Route 172 from 1 July 2026. Bus 178 (37 stops) ends after the 2026-06-15 snapshot; bus 172 Aseral-Evje (23 stops, published from 2026-06-15) runs from 2026-07-15. Stop similarity is only 0.46 because the route is shorter, so this pair comes from this mapping, not the automatic rules."
   },
   {
     "provider": "AKT",
     "old_line_id": "AKT:Line:9178",
     "new_line_id": "AKT:Line:9172",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa",
-    "note": "Same AKT news page: Aseral gets AKT Svipp (on-demand) with the new Route 172. The supplementary line 178S Aseral-Evje (published only in the 2026-06-15 snapshot, no fixed departures) continues as SVIPP Aseral-Evje under AKT:Line:9172. https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx"
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "Same AKT news page: Aseral gets AKT Svipp (on-demand) with the new Route 172. The supplementary line 178S Aseral-Evje (published only in the 2026-06-15 snapshot, no fixed departures) continues as SVIPP Aseral-Evje under AKT:Line:9172."
   },
   {
     "provider": "AKT",
     "old_line_id": "AKT:Line:1055",
     "new_line_id": "AKT:Line:55",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa",
-    "note": "Same AKT news page: Route 56 is discontinued and Route 55 is extended to Odderhei from 22 June 2026. Bus number 55 continues under a new NeTEx line ID (published from the 2026-06-15 snapshot, old ID gone in 2026-07-15). Route 56 (AKT:Line:1056) is a discontinuation, not a renumbering, so it is not listed here. https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx"
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "Same AKT news page: Route 56 is discontinued and Route 55 is extended to Odderhei from 22 June 2026. Bus number 55 continues under a new NeTEx line ID (published from the 2026-06-15 snapshot, old ID gone in 2026-07-15). Route 56 (AKT:Line:1056) is a discontinuation, not a renumbering, so it is not listed here."
   },
   {
     "provider": "KOL",
     "old_line_id": "KOL:Line:8_1000",
     "new_line_id": "KOL:Line:8_1109",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
-    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 1 Stavanger - Hundvåg blir nå rute 9.' Identical 34 stops (similarity 1.0). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 1 Stavanger - Hundvåg blir nå rute 9.' Identical 34 stops (similarity 1.0)."
   },
   {
     "provider": "KOL",
     "old_line_id": "KOL:Line:8_1005",
     "new_line_id": "KOL:Line:8_1112",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
-    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 4 Rosenli - Madlakrossen blir nå rute 12.' Identical 43 stops (similarity 1.0). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 4 Rosenli - Madlakrossen blir nå rute 12.' Identical 43 stops (similarity 1.0)."
   },
   {
     "provider": "KOL",
     "old_line_id": "KOL:Line:8_1002",
     "new_line_id": "KOL:Line:8_1001",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
-    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 2 Stavanger - Sandnes blir nå rute 1' (on Bussveien). Old line 2 is split; 75% of new line 1's stops were on old line 2, the rest are new Bussveien stops. New line 1 reuses the line ID of placeholder line A (no departures before July). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 2 Stavanger - Sandnes blir nå rute 1' (on Bussveien). Old line 2 is split; 75% of new line 1's stops were on old line 2, the rest are new Bussveien stops. New line 1 reuses the line ID of placeholder line A (no departures before July)."
   },
   {
     "provider": "KOL",
     "old_line_id": "KOL:Line:8_1002",
     "new_line_id": "KOL:Line:8_1104",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
-    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'rute 2 Stavanger - Risavika blir rute 4.' Second half of the split of old line 2; all of new line 4's stops were on old line 2. https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'rute 2 Stavanger - Risavika blir rute 4.' Second half of the split of old line 2; all of new line 4's stops were on old line 2."
   },
   {
     "provider": "KOL",
     "old_line_id": "KOL:Line:8_1004",
     "new_line_id": "KOL:Line:8_1003",
+    "from_snapshot": "2026-06-15",
     "to_snapshot": "2026-07-15",
     "verified": true,
     "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
-    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 3 Stavanger - Forus blir nå rute 2.' All of new line 2's stops were on old line 3. New line 2 reuses the line ID of placeholder line B (no departures before July). https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/"
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026' (Bussveien opens 1 July 2026): 'Rute 3 Stavanger - Forus blir nå rute 2.' All of new line 2's stops were on old line 3. New line 2 reuses the line ID of placeholder line B (no departures before July)."
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:1054",
+    "new_line_id": "AKT:Line:32",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Route 54 'Replaced by Route 32.' Bus 54 Kvadraturen - Høietun (AKT:Line:1054) ends; the new AKT:Line:32 (published from 2026-06-15) takes over."
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:1032",
+    "new_line_id": "AKT:Line:32",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': 'Route 32 will be extended to/from Drangsvann.' Bus 32 continues under a new line ID (similarity 0.64); together with route 54 it forms the new AKT:Line:32."
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:1019",
+    "new_line_id": "AKT:Line:19",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Route 19 continues: 'service frequency will change from every 30 minutes to every 35 minutes.' Same bus number under a new line ID (similarity 0.97)."
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:1030",
+    "new_line_id": "AKT:Line:30",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': 'Routes 30 and 31 will generally start and terminate at Grovane Station, north of Vennesla.' Bus 30 continues under a new line ID (similarity 0.90)."
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:1031",
+    "new_line_id": "AKT:Line:31",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Routes 30 and 31 terminate at Grovane; two morning departures on route 31 are discontinued. Bus 31 continues under a new line ID (similarity 0.89)."
+  },
+  {
+    "provider": "AKT",
+    "old_line_id": "AKT:Line:1035",
+    "new_line_id": "AKT:Line:35",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Route 35 continues: 'The route will generally start and terminate at the new turning loop at Brattvollsheia.' The new AKT:Line:35 was published from 2026-05-15, two snapshots early."
+  },
+  {
+    "provider": "KOL",
+    "old_line_id": "KOL:Line:8_1040",
+    "new_line_id": "KOL:Line:8_1024",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026': 'Rute X77 Blir lagt ned, og erstattes av rute 43.' Line 43 (KOL:Line:8_1024) was published since January with no departures and runs 55 departures in the window from July, the same as X77."
+  },
+  {
+    "provider": "KOL",
+    "old_line_id": "KOL:Line:8_2014",
+    "new_line_id": "KOL:Line:8_2687",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026': Rute 46: 'Ruta erstattes av rute nummer SK0203.' SK0203 was published from 2026-04-15; all its stops were on line 46 (similarity 0.61). It has no departures in the summer window and 31 from August."
   }
 ]

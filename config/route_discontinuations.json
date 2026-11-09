@@ -1,0 +1,42 @@
+[
+  {
+    "provider": "AKT",
+    "line_id": "AKT:Line:1056",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Route 56 Rona - Odderhei is discontinued from 22 June 2026; Route 55 is extended to Odderhei instead (see AKT:Line:1055 -> AKT:Line:55 in route_renumberings.json)."
+  },
+  {
+    "provider": "AKT",
+    "line_id": "AKT:Line:9110",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.akt.no/english/news/route-changes-in-agder-from-22-june-and-1-july-2026.9944.aspx",
+    "note": "AKT news 'Route changes in Agder from 22 June and 1 July 2026': Night bus N110: 'The Sunday-morning night bus departure at 02:45 from Arendal to Jovannslia will be discontinued.' AKT:Line:9110 had exactly one departure a week, at 26:45 on Saturday's service day (02:45 Sunday)."
+  },
+  {
+    "provider": "KOL",
+    "line_id": "KOL:Line:8_1042",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026': Rute 67: 'Blir lagt ned.'"
+  },
+  {
+    "provider": "KOL",
+    "line_id": "KOL:Line:8_5752",
+    "from_snapshot": "2026-06-15",
+    "to_snapshot": "2026-07-15",
+    "verified": true,
+    "verified_by": "ParneetKaurDhanoa (web check with Claude, 2026-11-09)",
+    "source_url": "https://www.kolumbus.no/aktuelt/ruteendringer-1.-juli-2026/",
+    "note": "Kolumbus 'Ruteendringer 1. juli 2026': Rute 704: 'Båtruten til Borgøy blir lagt ned.' (boat, water mode)"
+  }
+]

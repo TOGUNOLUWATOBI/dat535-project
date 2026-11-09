@@ -82,11 +82,13 @@ def show_summary(h, report):
     print(f"Route history: {h.path}")
     print("Snapshots:", ", ".join(s["snapshot_date"] for s in report["snapshots"]))
     print("Checks:", json.dumps({k: v for k, v in report["checks"].items() if k != "snapshots"}))
-    print("\nNetwork per snapshot (departures = planned departures in the 7-day Gold window)")
-    print(f"{'snapshot':11} {'prov':4} {'lines':>5} {'w/ service':>10} {'departures':>10} {'stops':>6}")
-    for r in h.table("network_snapshots").orderBy("snapshot_date", "provider").collect():
-        print(f"{r.snapshot_date:11} {r.provider:4} {r.lines_published:5} {r.lines_with_window_service:10} "
-              f"{r.window_departures:10} {r.stops_served:6}")
+    print("\nNetwork per published export (departures = planned departures in the 7-day Gold window;")
+    print("stops = provider stops in published patterns / served by journeys operating in the window)")
+    print(f"{'snapshot':11} {'prov':4} {'mode':6} {'lines':>5} {'w/ service':>10} {'departures':>10} {'stops':>13}")
+    for r in h.table("network_snapshots").orderBy("snapshot_date", "provider", "transport_mode").collect():
+        print(f"{r.snapshot_date:11} {r.provider:4} {r.transport_mode:6} {r.lines_published:5} "
+              f"{r.lines_with_window_service:10} {r.window_departures:10} "
+              f"{r.provider_stops_in_definitions:6}/{r.provider_stops_served_in_window:<6}")
 
 
 def show_candidates(h):
@@ -94,7 +96,7 @@ def show_candidates(h):
     lines = {(r.snapshot_date, r.provider, r.line_id): r for r in h.table("line_snapshots").select(
         "snapshot_date", "provider", "line_id", "name", "stop_ids", "window_departures").collect()}
     rows = h.table("renumbering_candidates").orderBy("from_snapshot", "provider", F.desc("stop_similarity")).collect()
-    print(f"{len(rows)} renumbering candidates (verified = listed in config/route_renumberings.json)\n")
+    print(f"{len(rows)} renumbering candidates (verified = verified entry in config/route_renumberings.json)\n")
     for n, r in enumerate(rows, 1):
         old = lines.get((r.from_snapshot, r.provider, r.old_line_id))
         new = lines.get((r.to_snapshot, r.provider, r.new_line_id))
@@ -121,21 +123,24 @@ def show_month(h, start, top):
     if not transitions.limit(1).count():
         raise SystemExit(f"No transition starting at {start}; use a snapshot date such as 2026-06-15")
     end = transitions.first().to_snapshot
-    print(f"Changes from {start} to {end}\n")
+    print(f"Differences between the {start} and {end} exports\n")
     for r in h.table("change_summary").where(F.col("from_snapshot") == start).orderBy("provider").collect():
-        print(f"{r.provider}: {r.lines_before}→{r.lines_after} lines (+{r.lines_added} / -{r.lines_retired}), "
-              f"{r.lines_structure_changed} changed, {r.lines_renumbered} renumbered, "
-              f"departures {r.window_departures_before}→{r.window_departures_after}, "
-              f"stops +{r.stops_gained_service} / -{r.stops_lost_service}")
-    for status, title in (("added", "New lines"), ("retired", "Removed lines")):
+        print(f"{r.provider}: {r.lines_before}→{r.lines_after} lines (+{r.lines_appeared} appeared / "
+              f"-{r.lines_disappeared} disappeared, of which {r.lines_disappeared_renumbered_verified} verified "
+              f"renumbered and {r.lines_disappeared_discontinued_verified} verified discontinued), "
+              f"{r.lines_structure_changed} changed, {r.lines_public_code_changed} new bus numbers, "
+              f"departures {r.window_departures_before}→{r.window_departures_after} "
+              f"(bus {r.bus_window_departures_before}→{r.bus_window_departures_after}), "
+              f"window-served stops +{r.stops_gained_window_service} / -{r.stops_lost_window_service}")
+    for status, title in (("appeared", "Lines that appeared"), ("disappeared", "Lines no longer observed")):
         rows = transitions.where(F.col("status") == status).orderBy("provider", "line_id").collect()
         if rows:
             print(f"\n{title} ({len(rows)}):")
             for r in rows:
-                code = r.public_code_after if status == "added" else r.public_code_before
-                name = r.name_after if status == "added" else r.name_before
-                departures = r.departures_after if status == "added" else r.departures_before
-                print(f"  {r.provider} bus {code:6} {name}  ({departures} departures)  {r.line_id}")
+                code = r.public_code_after if status == "appeared" else r.public_code_before
+                name = r.name_after if status == "appeared" else r.name_before
+                departures = r.departures_after if status == "appeared" else r.departures_before
+                print(f"  {r.provider} {code:6} {name}  ({departures} departures)  {r.line_id}  [{r.interpretation}]")
     renamed = transitions.where(F.array_contains("change_types", "public_code_changed")).collect()
     if renamed:
         print(f"\nRenumbered ({len(renamed)}):")
@@ -150,14 +155,15 @@ def show_month(h, start, top):
             if (r.departure_change < 0) == title.startswith("Largest departure cuts") and r.departure_change:
                 print(f"  {r.provider} bus {r.public_code_after:6} {r.departures_before:5} → {r.departures_after:5} "
                       f"({r.departure_change_ratio:+.0%})  {r.name_after}")
-    stops = h.table("stop_coverage_changes").where(F.col("from_snapshot") == start)
-    for kind, title in (("stop_lost_service", "Stops that lost all service"),
-                        ("stop_gained_service", "Stops that gained service")):
+    stops = h.table("stop_coverage_changes").where((F.col("from_snapshot") == start)
+                                                   & (F.col("measure") == "window_service"))
+    for kind, title in (("stop_lost", "Stops no longer served in the window"),
+                        ("stop_gained", "Stops newly served in the window")):
         rows = stops.where(F.col("change_type") == kind).orderBy("provider", "stop_name").collect()
         if rows:
             print(f"\n{title} ({len(rows)}):")
             for r in rows[:top * 3]:
-                codes = r.line_codes_before if kind == "stop_lost_service" else r.line_codes_after
+                codes = r.line_codes_before if kind == "stop_lost" else r.line_codes_after
                 print(f"  {r.provider} {r.stop_name or r.stop_id}  (buses {', '.join(codes)})  {r.stop_id}")
             if len(rows) > top * 3:
                 print(f"  … and {len(rows) - top * 3} more")
@@ -171,17 +177,17 @@ def show_line(h, provider, line):
         for r in h.table("line_snapshots").where(F.col("line_id") == line_id).orderBy("snapshot_date").collect():
             print(f"{r.snapshot_date:11} {r.public_code:6} {r.stop_count:5} {r.pattern_count:8} {r.window_departures:10} "
                   f"{clock(r.first_departure_seconds):>6} {clock(r.last_departure_seconds):>7}  {r.name}")
-        print("\nVersions (SCD Type 2):")
+        print("\nVersions (SCD Type 2, by observation date):")
         for v in h.table("line_versions").where(F.col("line_id") == line_id).orderBy("version_number").collect():
-            print(f"  v{v.version_number}: {v.valid_from} … {v.last_observed}  bus {v.public_code}, {v.stop_count} stops, "
-                  f"{v.pattern_count} patterns  reason={v.version_reason}"
-                  f"{'  (current)' if v.is_current else f'  superseded in {v.superseded_in}'}"
+            print(f"  v{v.version_number}: observed {v.first_observed} … {v.last_observed}  bus {v.public_code}, "
+                  f"{v.stop_count} stops, {v.pattern_count} patterns  reason={v.version_reason}"
+                  f"{'  (in latest export)' if v.observed_in_latest else f'  not observed from {v.first_not_observed}'}"
                   f"{f'  renumbered from {v.renumbered_from_line_id}' if v.renumbered_from_line_id else ''}")
         changes = h.table("line_changes").where(F.col("line_id") == line_id).orderBy("from_snapshot", "change_type").collect()
         print("\nChanges:" if changes else "\nChanges: none")
         for c in changes:
             detail = ""
-            if c.change_type in ("stops_added", "stops_removed", "line_added", "line_retired"):
+            if c.change_type in ("stops_added", "stops_removed", "line_appeared", "line_disappeared"):
                 detail = f"  [{h.name_stops(c.items)}]"
             elif c.change_type.endswith("departure_changed"):
                 detail = f"  {clock(float(c.old_value)) if c.old_value else '-'} → {clock(float(c.new_value)) if c.new_value else '-'}"
@@ -209,7 +215,7 @@ def show_date(h, provider, line, day):
         if rows:
             for r in rows:
                 print(f"{provider.upper()} {line_id} on {day}: version v{r.version_number} (bus {r.version_public_code}, "
-                      f"valid {r.valid_from} … {r.last_observed}), {r.scheduled_departures} planned departures "
+                      f"observed {r.first_observed} … {r.last_observed}), {r.scheduled_departures} planned departures "
                       f"{clock(r.first_departure_seconds)}–{clock(r.last_departure_seconds)}, published in snapshot {r.snapshot_date}")
             continue
         snapshots = sorted(r.snapshot_date for r in h.table("line_snapshots").where(F.col("line_id") == line_id)
