@@ -1000,3 +1000,33 @@ original local dataset was not changed. A real Spark fixture also verified
 ZIP-backed processing, checkpoint reuse, independent XML-to-Gold tracing and
 cleanup after processing. The server format migration has not been run or
 claimed here. Its free-space result must be checked after the user runs it.
+
+
+10 November 2026 - Server ZIP migration and the next memory problem
+
+The user ran the migration on Spark. Its report contains 34 migrated snapshots,
+12 skipped entries and no problems. Free disk space rose from about 3.5 GiB to
+23 GiB, with the root disk at 41 percent used. That confirms compression solved
+the immediate disk pressure; those are the actual server figures, not a local
+estimate. The raw XML bytes remain inside the verified selected ZIPs.
+
+The full-month rebuild then completed 14 of its 22 jobs. The next input, the
+1 April calendar-support export, failed in staging with Java heap exhaustion.
+The later gateway errors were consequences of the JVM crash. The launcher had
+not specified a heap budget and the batch kept every snapshot in one JVM.
+We cannot prove how much was caused by the larger April input versus retained
+state across that long run, so the fix addresses both.
+
+The rebuild now sets a 2 GiB driver heap before JVM startup and runs one Spark
+worker process at a time, with a fresh process for each snapshot and for history.
+The parent saves progress and errors independently of the JVM. Exception text
+and shutdown handling no longer prevent failure recording if the gateway dies.
+The transformation fingerprint inputs are unchanged, so the completed server
+checkpoints can be reused rather than rebuilding those 14 snapshots.
+
+An isolated copy of the real April ZIP passed staging, Silver and Gold with an
+actual 2,147,483,648-byte heap. It contained 34,309 journeys and 1,193,513 passing
+times; Silver recorded no quarantined journeys or passing times. A second worker
+reused all three stages. The parent rebuild also resumed it and passed April's
+full-month coverage audit. Original local datasets were not changed. The resumed
+22-job school-server run still needs to be completed and checked separately.

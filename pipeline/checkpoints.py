@@ -16,6 +16,8 @@ import socket
 import sqlite3
 from uuid import uuid4
 
+from pipeline.spark_runtime import error_text
+
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -138,7 +140,7 @@ class Checkpoints:
             return output, sha, False
         except BaseException as error:
             self.db.execute("UPDATE stage_attempts SET status='failed',finished_at=?,error=? WHERE attempt_id=?",
-                            (now(), f"{type(error).__name__}: {error}", attempt))
+                            (now(), error_text(error), attempt))
             self.db.commit()
             raise
 

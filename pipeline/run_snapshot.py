@@ -12,6 +12,7 @@ from pipeline.checkpoints import Checkpoints, digest, identity
 from pipeline.processing.bronze.staging_sources import load_snapshot_sources
 from pipeline.processing.windows import service_window
 from pipeline.storage.zip_bronze import with_snapshot_xml
+from pipeline.spark_runtime import error_text, memory_size, stop_spark, worker_environment
 
 
 def implementation(*paths):
@@ -89,6 +90,7 @@ def main():
                         help="Calendar-support exports fill service dates without changing the historical observation sample")
     parser.add_argument("--quality-thresholds",type=Path,help=f"Gold publication rules (default: {QUALITY_THRESHOLDS})")
     parser.add_argument("--master",default="local[2]")
+    parser.add_argument("--driver-memory",type=memory_size,default=os.environ.get("DAT535_DRIVER_MEMORY","2g"))
     args=parser.parse_args()
     spark=None
     try:
@@ -98,6 +100,10 @@ def main():
             days=[date.fromisoformat(s["snapshot_date"]) for s in manifest.get("snapshots",[])
                   if s["status"] in ("validated","validated_with_warnings")]
             if not days: raise ValueError("No validated historical snapshots found")
+        environment = worker_environment(args.driver_memory)
+        os.environ.pop("PYSPARK_GATEWAY_PORT", None)
+        os.environ.pop("PYSPARK_GATEWAY_SECRET", None)
+        os.environ.update(environment)
         from pyspark.sql import SparkSession
         if args.master.startswith("local"):
             os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
@@ -110,9 +116,9 @@ def main():
                 args.through,args.service_from,args.service_to,args.quality_thresholds,args.history_role)},indent=2),flush=True)
         return 0
     except Exception as error:
-        print(f"Pipeline failed: {type(error).__name__}: {error}",file=sys.stderr); return 1
+        print(f"Pipeline failed: {error_text(error)}",file=sys.stderr); return 1
     finally:
-        if spark is not None: spark.stop()
+        stop_spark(spark)
 
 
 if __name__ == "__main__":sys.exit(main())

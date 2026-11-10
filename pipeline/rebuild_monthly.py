@@ -11,12 +11,13 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 from uuid import uuid4
 
 from pipeline.ingestion.generate_provider_dataset import save_json
 from pipeline.processing.windows import month_bounds
-from pipeline.run_snapshot import run_snapshot
+from pipeline.spark_runtime import error_text, memory_size, worker_environment
 
 
 def manifest_jobs(path, role="primary"):
@@ -100,6 +101,24 @@ def ensure_support_months(jobs, plan_path, remove_national=False):
     return support
 
 
+def run_worker(task, target, data_root, master, driver_memory, job=None):
+    """Wait for one worker to exit fully before launching the next JVM."""
+    target = Path(target).resolve()
+    command = [sys.executable, "-B", "-u", "-m", "pipeline.batch_worker", "--task", task,
+               "--data-root", str(Path(data_root).resolve()), "--master", master, "--result", str(target)]
+    if job is not None:
+        job_path = target.with_name(target.stem + "-input.json")
+        save_json(job_path, job)
+        command.extend(["--job", str(job_path)])
+    process = subprocess.run(command, cwd=Path(__file__).resolve().parent.parent,
+                             env=worker_environment(driver_memory), check=False)
+    result = json.loads(target.read_text()) if target.is_file() else {}
+    if process.returncode != 0 or result.get("status") != "complete":
+        raise RuntimeError(f"{task} worker exited with code {process.returncode}: "
+                           f"{result.get('error', 'worker stopped before recording completion')}; see {target}")
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, required=True)
@@ -109,55 +128,60 @@ def main(argv=None):
                         help="Only for newly prepared extra-month support archives; failed sources stay")
     parser.add_argument("--skip-history", action="store_true", help="For isolated verification runs only")
     parser.add_argument("--master", default="local[2]")
+    parser.add_argument("--driver-memory", default=os.environ.get("DAT535_DRIVER_MEMORY", "2g"),
+                        type=memory_size, help="Java heap per sequential worker, set before JVM startup (default: 2g)")
     args = parser.parse_args(argv)
-    jobs = {(j["snapshot_date"], j["history_role"]): j for j in registered_jobs(args.data_root)}
-    for path in args.primary_manifest:
-        jobs.update({(j["snapshot_date"], j["history_role"]): j for j in manifest_jobs(path)})
-    support = ensure_support_months(jobs.values(), args.support_plan, args.remove_national_after_validation)
-    if {j["snapshot_date"] for j in support} & {day for day, _ in jobs}:
-        raise ValueError("Support sources must use dates distinct from the primary observation sample")
-    jobs.update({(j["snapshot_date"], j["history_role"]): j for j in support})
+    args.data_root = args.data_root.resolve()
     target = args.data_root / "rebuilds" / f"monthly-{uuid4().hex[:12]}"
     target.mkdir(parents=True)
-    report = {"status": "in_progress", "jobs": list(jobs.values()), "outputs": []}
+    (target / "workers").mkdir()
+    report = {"status": "preparing", "phase": "support", "jobs": [], "outputs": [], "driver_memory": args.driver_memory,
+              "execution": "one_sequential_process_per_snapshot"}
     save_json(target / "manifest.json", report)
-    spark = None
     try:
-        from pyspark.sql import SparkSession
-        os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-        spark = (SparkSession.builder.appName("DAT535-full-month-rebuild").master(args.master)
-                 .config("spark.sql.session.timeZone", "Europe/Oslo").config("spark.sql.shuffle.partitions", "4")
-                 .config("spark.ui.showConsoleProgress", "false").getOrCreate())
-        spark.sparkContext.setLogLevel("WARN")
+        jobs = {(j["snapshot_date"], j["history_role"]): j for j in registered_jobs(args.data_root)}
+        for path in args.primary_manifest:
+            jobs.update({(j["snapshot_date"], j["history_role"]): j for j in manifest_jobs(path)})
+        support = ensure_support_months(jobs.values(), args.support_plan, args.remove_national_after_validation)
+        if {j["snapshot_date"] for j in support} & {day for day, _ in jobs}:
+            raise ValueError("Support sources must use dates distinct from the primary observation sample")
+        jobs.update({(j["snapshot_date"], j["history_role"]): j for j in support})
+        report.update(status="in_progress", phase="snapshots", jobs=list(jobs.values()))
+        save_json(target / "manifest.json", report)
         manifests = []
         for n, job in enumerate(jobs.values(), 1):
             print(f"[{n}/{len(jobs)}] Full month: {job['snapshot_date']} ({job['history_role']})", flush=True)
-            outputs = run_snapshot(spark, job["manifest"], job["snapshot_date"], args.data_root,
-                                   service_from=job.get("service_from"), service_to=job.get("service_to"),
-                                   history_role=job["history_role"])
-            report["outputs"].append({**job, "stages": outputs})
+            report["current_job"] = job
+            save_json(target / "manifest.json", report)
+            result = run_worker("snapshot", target / "workers" / f"snapshot-{n:03d}.json", args.data_root,
+                                args.master, args.driver_memory, job)
+            outputs = result["stages"]
+            report["outputs"].append({**job, "stages": outputs, "runtime": result["runtime"]})
             manifests.append(json.loads((Path(outputs["gold"]["path"]) / "metadata/manifest.json").read_text()))
             save_json(target / "manifest.json", report)
+        report.pop("current_job", None)
+        report["phase"] = "coverage"
+        save_json(target / "manifest.json", report)
         report["coverage"] = audit_coverage(manifests, [j["service_from"][:7] for j in support])
         if not all(v["complete"] for v in report["coverage"].values()):
             raise RuntimeError("Full-month coverage audit failed; missing dates are recorded in the rebuild manifest")
         if not args.skip_history:
-            from pipeline.analysis.route_history import run
-            path, _, _ = run(spark, args.data_root, mappings_path=Path("config/route_renumberings.json"),
-                             discontinuations_path=Path("config/route_discontinuations.json"))
-            report["history"] = str(path)
+            report["phase"] = "history"
+            save_json(target / "manifest.json", report)
+            result = run_worker("history", target / "workers/history.json", args.data_root,
+                                args.master, args.driver_memory)
+            report["history"] = result["history"]
         report["status"] = "complete"
+        report["phase"] = "complete"
+        report.pop("current_job", None)
         save_json(target / "manifest.json", report)
         print(f"COMPLETE: {target / 'manifest.json'}", flush=True)
         return 0
     except Exception as error:
-        report.update(status="failed", error=f"{type(error).__name__}: {error}")
+        report.update(status="failed", error=error_text(error))
         save_json(target / "manifest.json", report)
         print(report["error"], file=sys.stderr)
         return 1
-    finally:
-        if spark is not None:
-            spark.stop()
 
 
 if __name__ == "__main__":

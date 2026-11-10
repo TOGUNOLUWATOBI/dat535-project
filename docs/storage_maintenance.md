@@ -83,6 +83,10 @@ the storage migration itself keeps the source fingerprint unchanged. Source hash
 are validated even when every stage can be reused. GUI and route-history reads
 of existing Gold do not need raw XML extraction.
 
+The full-month rebuild uses a separate 2 GiB Java heap per sequential snapshot
+worker. A Java `OutOfMemoryError` concerns RAM; deleting Bronze ZIPs cannot fix
+it. See [batch runtime and resume](full_month_processing.md).
+
 Low-level `load_sources`/`load_snapshot_sources` callers that read XML directly
 must hold `pipeline.storage.zip_bronze.snapshot_xml(manifest, date)` around their
 whole operation. Public processing entry points do this automatically.

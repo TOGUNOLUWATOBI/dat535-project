@@ -64,6 +64,22 @@ reused; changed implementations produce new attempts. A changed source selector
 can require new staging as well as Silver and Gold.
 
 The command records progress under `DATA_ROOT/rebuilds/monthly-*/manifest.json`.
+It launches one sequential Python/Spark worker per snapshot, followed by a
+separate route-history worker. Each JVM exits before the next worker starts,
+releasing its heap, cached plans and shuffle state. The default Java driver
+heap is 2 GiB; override it with `--driver-memory 3g` or `DAT535_DRIVER_MEMORY` if
+the host has sufficient RAM. The heap is configured before JVM startup, as
+required for [Spark client-mode driver memory](https://spark.apache.org/docs/4.2.0/configuration.html#application-properties).
+This is RAM, separate from disk space used by raw ZIPs and temporary XML.
+
+Each worker writes its result and actual heap limit under the rebuild's
+`workers/` directory. The parent process records failure and completed progress
+even if a worker's JVM crashes. The staging/Silver/Gold transformation versions
+are unchanged by worker isolation, so completed compatible checkpoints are
+reused. Failed or interrupted attempts remain as evidence and receive a new
+attempt when retried. Re-run the same rebuild command to resume; use a new
+terminal log filename to preserve the failed run's log.
+
 It checks every requested date for both providers before marking completion,
 then rebuilds route history. A rerun uses completed checkpoints. If the process
 fails, its evidence is preserved. `--skip-history` is for isolated verification
