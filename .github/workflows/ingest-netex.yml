@@ -92,7 +92,7 @@ jobs:
       - name: Consolidate verified duplicate Bronze files
         if: steps.ingest.outcome == 'success' && inputs.check_only != true
         run: |
-          python3 -B -u -m pipeline.bronze_storage \
+          python3 -B -u -m pipeline.storage.maintenance \
             --bronze-root "$DAT535_DATA_ROOT/bronze/entur" --apply \
             --report "$INGESTION_OUTPUT/metadata/storage_deduplication.json"
 

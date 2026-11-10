@@ -1030,3 +1030,42 @@ times; Silver recorded no quarantined journeys or passing times. A second worker
 reused all three stages. The parent rebuild also resumed it and passed April's
 full-month coverage audit. Original local datasets were not changed. The resumed
 22-job school-server run still needs to be completed and checked separately.
+
+
+10 November 2026 - Repository sweep after the GUI restart change
+
+We reviewed the tracked files and actual function callers rather than deleting
+files just because there were a lot of them. No ZIPs, XML datasets, Parquet,
+databases or logs were tracked. The large local data and audit folders were
+already ignored, so we left those original files and environments alone.
+
+Four old GUI helpers were no longer used by the application. We removed them
+and kept the useful filter, weekday and quality-status checks against the active
+monthly functions and visible GUI instead. Storage maintenance moved from
+pipeline/bronze_storage.py to pipeline/storage/maintenance.py. Its workflow call,
+imports and current instructions moved too. We grouped GUI, quality and storage
+tests into matching packages; their package markers are needed for unittest
+collection. The unused top-level quarantine placeholder was removed because
+quarantine records are actually written beside each Silver run.
+
+A storage review also found that choosing a new duplicate as canonical could
+miss an older group of existing hardlinks. The helper now prefers the already
+shared inode. Its regression test checks that the new copy joins that group,
+keeps the original inode and bytes, and is idempotent on another pass.
+
+The root README and directory map still described the GUI and Silver/Gold as
+future work. They now describe the implemented pipeline, actual ZIP retention,
+current commands and the successful January-November server coverage check.
+Older seven-day reports remain dated evidence. Links to ignored local audits
+are labelled as local paths instead of broken GitHub links. The task plan is
+still a backlog, not a claim that every feature is finished. Serving-database
+publication, a GUI upload interface and full XSD/profile validation remain open.
+
+The sweep preserved all transformation and route-history fingerprint inputs:
+we did not reformat those files just for style and force a replay of the completed
+server data. There is a redundant date import in Silver to remove during a future
+substantive edit there. Comments added in this sweep explain source-export date
+preservation, partial test windows and the hardlink choice, rather than narrating
+obvious assignments. The GUI environment passed 171 discovered tests with 21
+Spark skips; the Spark environment passed the same suite with 28 GUI skips.
+Together they executed every one of the 171 cases. No raw data was deleted.

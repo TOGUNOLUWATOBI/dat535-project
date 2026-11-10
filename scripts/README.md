@@ -1,6 +1,6 @@
 # Operations and scheduling
 
-Place deployment helpers and maintenance commands here when needed.
+These scripts are the operational entry points for the pipeline and GUI.
 Keep reusable ingestion, storage, and processing logic in `pipeline/`.
 
 Automatic ingestion is scheduled with GitHub Actions in
@@ -15,6 +15,16 @@ processing can be run with `bash scripts/run_processing.sh`; see the
 [checkpointed processing instructions](../docs/processing_pipeline.md).
 The development workflow calls this after validated ingestion. Its change must
 reach `main` before automatic runs use it.
+
+After successful processing and route history, the workflow calls
+`bash scripts/run_gui.sh --restart`. This stops the existing GUI on its configured
+port and starts a background instance. It listens on loopback; use SSH forwarding
+for port 8501. The log is `DAT535_DATA_ROOT/metadata/gui.log`. The same script
+without `--restart` runs in the foreground for manual use.
+
+ZIP migration and storage maintenance are Python modules, not extra shell helpers:
+`python3 -m pipeline.storage.zip_bronze --help` and
+`python3 -m pipeline.storage.maintenance --help`.
 
 Route changes across the completed snapshots are built with
 `bash scripts/run_route_history.sh --data-root /srv/dat535/data` and shown with

@@ -2,6 +2,9 @@
 
 6-week plan · 2 developers + AI
 
+This document records project scope and the task backlog. Current implemented
+features, storage policy and run commands are in the [repository README](../README.md).
+
 This is the task breakdown I recommend for you and your partner, organized into epics, user stories, technical tasks, ownership, and deliverables.
 
 The workload is divided so that both of you can work independently without constantly blocking each other, while still collaborating on the most important part of the course: Silver processing using PySpark.
@@ -17,7 +20,7 @@ Problem we're solving: Kolumbus and Agder bus routes, numbers, stopping patterns
 | Region               | Rogaland and Agder: Kolumbus (`KOL`) + Agder Kollektivtrafikk (`AKT`) |
 | Historical period    | 15 January – 15 September 2026                   |
 | Historical ingestion | Nine monthly NeTEx snapshots, on the 15th of each month |
-| Other ingestion      | Manual ZIP upload, API polling, daily/weekly cron |
+| Other ingestion      | Manual ZIP ingestion, API polling and GitHub Actions scheduling |
 | Processing           | PySpark + Spark SQL                               |
 | Architecture         | Bronze → Silver → Gold                            |
 | Interface            | Streamlit GUI                                     |

@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from pipeline.checkpoints import Checkpoints
 from pipeline.rebuild_monthly import main, run_worker
-from pipeline.spark_runtime import error_text, stop_spark, worker_environment
+from pipeline.spark_runtime import stop_spark, worker_environment
 
 
 class DeadGatewayError(Exception):

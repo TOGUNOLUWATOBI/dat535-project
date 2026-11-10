@@ -78,34 +78,6 @@ def gold_table(items, name):
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def gate_status(manifest):
-    """Quality-gate result recorded in a Gold manifest (older outputs predate the gate)."""
-    gate = manifest.get("quality_gate")
-    if not gate:
-        return "not recorded"
-    rules = sorted({f["rule"] for f in gate.get("findings", [])})
-    return gate["status"] + (f" ({', '.join(rules)})" if rules else "")
-
-
-def overview(items):
-    """Per snapshot and provider: departures by mode, lines and the quality gate."""
-    rows = []
-    summary = gold_table(items, "line_window_summary")
-    for item in items:
-        part = summary[summary.snapshot_date == item["snapshot_date"]]
-        recon = item["gold_manifest"].get("reconciliation", {})
-        for provider, group in part.groupby("provider"):
-            rows.append({
-                "snapshot": item["snapshot_date"], "window": f"{item['service_from']} – {item['service_to']}",
-                "provider": provider, "lines with service": group.line_entity_id.nunique(),
-                "departures": int(group.scheduled_departures.sum()),
-                "bus": int(group[group.line_transport_mode == "bus"].scheduled_departures.sum()),
-                "water": int(group[group.line_transport_mode == "water"].scheduled_departures.sum()),
-                "excluded occurrences (snapshot)": recon.get("excluded_service_occurrences"),
-                "quality gate": gate_status(item["gold_manifest"])})
-    return pd.DataFrame(rows)
-
-
 class History:
     """The newest complete route-history output."""
 

@@ -119,7 +119,7 @@ class CombinedDatasetTests(unittest.TestCase):
             builder.generate(['KOL','AKT'],[date(2026,1,15)],output,resume=True)
 
     def test_existing_dataset_resumes_after_verified_provider_zip_cleanup(self):
-        from pipeline.bronze_storage import discard_provider_zips
+        from pipeline.storage.maintenance import discard_provider_zips
         output,_=self.run_generation()
         report=discard_provider_zips(output,apply=True)
         self.assertEqual(report['zip_copies'],1)

@@ -1,35 +1,27 @@
 # Pipeline outputs
 
-These directories hold or reserve storage locations for pipeline outputs:
+These are local development output directories. On the school server, the same
+layers live under `/srv/dat535/data`, outside the checkout.
 
-| Directory | Intended contents |
+| Directory | Contents |
 | --- | --- |
-| `bronze/` | Raw API responses and manually uploaded source files, with ingestion metadata |
-| `staging/` | Parsed NeTEx entity tables before Silver transformations |
-| `silver/` | Typed, connected and validated structured datasets |
-| `gold/` | Published analytical tables and export files |
-| `quarantine/` | Rejected records/files with reason codes and source lineage |
+| `bronze/` | Original selected XML stored in ZIPs, uploads, lineage and validation |
+| `staging/` | Parsed NeTEx entity Parquet with source/frame context |
+| `silver/` | Resolved, typed records, calendars and `quarantine_*` tables |
+| `gold/` | Reconciled planned-service metrics and route history |
 
-Local development snapshot collection writes new runs into `bronze/entur/`, each
-with original source data, selected XML/ZIP, lineage and a validation report.
-The GitHub workflow runs on the school's self-hosted Linux runner and writes to
-`DAT535_DATA_ROOT/bronze/entur/` on persistent server storage outside the checkout.
-National sources, selected XML/ZIP and reports stay there, including failed runs.
-Only a report copy is uploaded to GitHub. The runner is registered on `spark`,
-with `DAT535_DATA_ROOT=/srv/dat535/data`. Setup checks are stored there under
-`bronze/entur/setup-check-20261024/` (metadata only) and
-`bronze/entur/manual-full-20261023-20261024/` (complete manual ingestion of the
-23 October archive). Original archives and selected XML remain on the server.
+New selected raw snapshots can use `--zip-only`; processing temporarily restores
+their XML and releases the verified extraction afterwards. Successful national
+ZIPs are removed only with the explicit cleanup option; failed sources and
+original manual uploads remain. See [storage](../docs/storage_maintenance.md).
 
-The existing NeTEx source dataset remains under
-[`entur_netex_snapshots/kol_agder_2026/`](../entur_netex_snapshots/kol_agder_2026/).
-Keeping that location preserves its current metadata paths. Staging now has a
-first Spark projection for provider frames, lines, service journeys and passing
-times; see [XML-to-Parquet processing](../docs/xml_to_parquet.md). The complete
-processing command also writes shared-reference staging, Silver, Gold and
-per-run `quarantine_*` tables. The separate top-level `quarantine/` directory is
-still reserved; current rejected records stay beside their Silver run. See
-[processing/checkpoint contracts](../docs/processing_pipeline.md).
+The checkpoint registry, batch progress, reports and GUI logs also live under
+the chosen data root. SQLite stores metadata; timetable facts remain in Parquet.
+Rejected records live beside each Silver run, with reasons and source lineage.
+There is no writer for a separate top-level `quarantine/` directory.
 
-Generated data is ignored by Git. The README and directory placeholders remain
-available in a checkout.
+The original local dataset at `entur_netex_snapshots/kol_agder_2026/` remains
+untouched and ignored. Generated data, logs and databases are not tracked by Git;
+only this README and the active layer placeholders are kept in a fresh checkout.
+See [processing contracts](../docs/processing_pipeline.md) and
+[full-month rebuilding](../docs/full_month_processing.md).

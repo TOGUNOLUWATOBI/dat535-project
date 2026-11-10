@@ -1,17 +1,20 @@
 # Configuration
 
-Place environment-specific pipeline settings here as ingestion and processing
-are implemented. Source/provider selection and output paths are currently CLI
-arguments to the acquisition tools. The cron expression is in
-`.github/workflows/ingest-netex.yml`; there is no separate scheduling config.
+| File | Purpose |
+| --- | --- |
+| `quality_thresholds.json` | Rules that decide whether Gold may publish |
+| `route_renumberings.json` | Candidate or verified line replacements, with source evidence |
+| `route_discontinuations.json` | Candidate or verified discontinuations, with source evidence |
 
-For the school's self-hosted Linux runner, set GitHub repository variable
-`DAT535_DATA_ROOT` to an existing persistent server directory, for example
-`/srv/dat535/data`. It must be writable by the runner account and separate from
-the code checkout and runner temporary directory. Scheduled runs write into
-`DAT535_DATA_ROOT/bronze/entur/`. The workflow requires runner labels
-`self-hosted`, `linux` and `dat535`; see [server setup](../docs/scheduled_ingestion.md).
+Only entries explicitly marked `verified: true` are presented as confirmed.
+An unmatched verified mapping fails route-history publication. Changing quality
+thresholds changes Gold's implementation identity and requires a new publication
+attempt; the previous outputs remain. See [data quality](../docs/data_quality.md)
+and [route history](../docs/route_history.md).
 
-Future configuration covers source endpoints, schedules, storage paths, Spark
-settings, and database connection settings. Store credentials in environment
-variables or local ignored files.
+Provider selection and source/output paths are command-line arguments. The
+schedule is in `.github/workflows/ingest-netex.yml`; GUI appearance is in
+`.streamlit/config.toml`. The runner's repository variable `DAT535_DATA_ROOT`
+must point to writable persistent data outside its checkout, normally
+`/srv/dat535/data`. Never commit credentials: use environment variables, GitHub
+secrets or ignored local files. See [runner setup](../docs/scheduled_ingestion.md).

@@ -1,1 +1,1 @@
-"""Planned cleaning, calendar expansion, joins, and quality rules."""
+"""Reference resolution, calendar expansion, cleaning and quarantine."""

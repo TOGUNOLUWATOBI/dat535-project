@@ -1,155 +1,145 @@
 # DAT535 — Kolumbus and Agder timetable pipeline
 
-Historical Entur NeTEx snapshots for Kolumbus (`KOL`) and Agder Kollektivtrafikk
-(`AKT`), sampled on the 15th of each month from January through September 2026.
-The data describes published planned services.
+A data engineering pipeline for Entur NeTEx timetable exports, filtered to
+Kolumbus (`KOL`, Rogaland) and Agder Kollektivtrafikk (`AKT`). It preserves source
+provenance, builds validated Parquet tables with Spark, and presents planned
+service and route changes in Streamlit.
 
-## Project structure
+The original historical sample contains nine exports dated the 15th of each
+month, January–September 2026. Additional calendar-support exports reconstruct
+whole service months; scheduled ingestion adds later observations. On 10 November
+2026, the school-server rebuild completed **22 jobs**, passed full-month coverage
+for **January–November**, and produced route history. November includes future
+published plans. These data do not establish which vehicles actually operated.
+See [verified coverage](docs/monthly_coverage.md).
+
+## What is implemented
+
+- Historical acquisition, manual ZIP ingestion and scheduled API polling.
+- Source-generation pinning, checksums, XML/reference validation and lineage.
+- ZIP-backed Bronze storage with temporary XML extraction during processing.
+- Spark staging, reference resolution, service calendars, quarantine and Gold metrics.
+- Verified checkpoints and a sequential worker per snapshot with a 2 GiB driver heap.
+- Route changes, line versions and operator-sourced evidence for confirmed replacements.
+- A read-only GUI with daily service, monthly comparison, line history and data checks.
+
+Transport facts live in Parquet. SQLite holds processing state and the manual
+upload catalog; a separate serving database remains planned. XML/reference and
+publication checks are implemented; full NeTEx XSD/profile validation remains
+outstanding.
+
+## Repository layout
 
 ```text
-pipeline/                 Python code
-  ingestion/              Historical acquisition and scheduled snapshot collection
-  processing/             XML-to-Parquet staging; planned Silver and Gold processing
-  storage/                Planned database publication
-  analysis/               Route history across snapshots (docs/route_history.md)
-app/                      Streamlit Gold explorer (bash scripts/run_gui.sh)
-config/                   Configuration conventions
-scripts/                  Operational notes and future deployment helpers
-tests/ingestion/          Acquisition and generation tests
-docs/                     Task plan, project journal, directory map and audits
-entur_netex_snapshots/    Existing original NeTEx dataset
-data/                     Local development outputs; server data uses external storage
+app/                      Streamlit pages, Gold readers and analysis helpers
+config/                   Quality thresholds and verified route-change evidence
+pipeline/
+  ingestion/              Historical, polling, manual and calendar-support ingestion
+  processing/             Bronze staging, Silver transformations and Gold tables
+  storage/                ZIP retention, restoration and storage maintenance
+  quality/                Publication gates and independent source-to-Gold checks
+  analysis/               Route-history construction and inspection
+  checkpoints.py          SQLite attempt registry and output verification
+  run_snapshot.py         One checkpointed snapshot through staging/Silver/Gold
+  rebuild_monthly.py      Whole-month batch preparation, processing and coverage audit
+  batch_worker.py         One Spark process for a batch operation
+  spark_runtime.py        Heap configuration and JVM failure handling
+scripts/                  Commands for processing, tests, inspection and the GUI
+tests/                    Ingestion, processing, storage, quality, GUI and runtime tests
+docs/                     Operations, project plan, decisions and validation evidence
+data/                     Ignored local outputs; README and active-layer placeholders only
 ```
 
-See the [full directory tree](docs/directory_structure.md),
-[task plan](docs/task_readme.md), and [project journal](docs/project_journal.txt).
-Historical acquisition and an automatic GitHub Actions workflow for the school's
-self-hosted Linux runner are implemented. Complete snapshot staging and the
-first checkpointed Silver/Gold processing slice are implemented, and route-change
-history across the nine snapshots is in [route history](docs/route_history.md).
-Database publication and the GUI remain to build.
-The runner is online on `spark`; all 68 current tests passed there with
-PySpark 4.2.0 and a project-specific Java 17 runtime.
-The workflow is published on `main`. Full manual and automatic push-triggered
-Actions ingestion passed on `dat535-spark`: [successful push run](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40537981353).
-Scheduled ingestion was also verified overnight on 27–28 October:
-[successful scheduled run](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/40638229520).
-The five-minute test schedule produced three successful runs hours apart, so
-the configured interval is not demonstrated by the observed run history.
+The original local dataset under `entur_netex_snapshots/` is ignored by Git.
+The school server stores its datasets under `/srv/dat535/data`, outside the
+checkout. Raw datasets, Parquet, databases, logs and Python environments do not
+belong in Git. See the [directory map](docs/directory_structure.md).
 
-## Current dataset
+## Ingestion
 
-[Open the dataset documentation](entur_netex_snapshots/kol_agder_2026/README.md).
-There are nine snapshots and 4,866 XML files: **4.15 GB of provider XML**, or
-**7.96 GB including national stop registries**. Compact copies total **586 MB**.
-The XML and ZIPs represent the same selected source data.
+Run from the project root with Python 3.11 or newer. Acquisition uses the
+standard library. Choose a new output directory for a historical build:
 
-The dataset retains its simple `xml/`, `zip/`, and `metadata/` layout. Provider
-reference and same-file version checks passed. Agder's July–September snapshots
-contain 182 repeated ID/version occurrences, preserved and flagged for
-preprocessing. Registry-only reference diagnostics are recorded separately.
-Full NeTEx XSD/profile validation and calendar expansion remain outstanding.
-
-## Acquisition commands
-
-Run from the project root with Python 3.11 or newer. The implemented tools use
-the standard library and need no package installation. Document the external
-dependencies when the Spark, GUI and database parts are implemented.
-
-```sh
-python3 -B -m pipeline.ingestion.generate_provider_dataset --help
-python3 -B -m pipeline.ingestion.download_entur_netex --help
-python3 -B -m pipeline.ingestion.poll_entur_netex --help
-python3 -B -m pipeline.ingestion.ingest_local_zip --help
-```
-
-To generate a fresh copy, use a **new** output directory:
-
-```sh
+```bash
 python3 -B -u -m pipeline.ingestion.generate_provider_dataset \
-  --providers KOL AKT \
-  --from-month 2026-01 --to-month 2026-09 \
-  --output entur_netex_snapshots/kol_agder_2026_rebuild \
-  --remove-national-after-validation
+  --providers KOL AKT --from-month 2026-01 --to-month 2026-09 \
+  --output entur_netex_snapshots/kol_akt_rebuild \
+  --zip-only --remove-national-after-validation
 ```
 
-The final option removes only the national ZIP downloaded for each successfully
-validated snapshot. Omit it to keep those archives. Original selected XML,
-checksums and lineage are retained, including source-quality warnings.
+For new API observations or a manual upload:
 
-For an interrupted build, add `--resume` with the same providers, dates, and
-working output directory. Existing material is verified against its recorded
-lineage. The already completed, tidied delivery under `kol_agder_2026/` should be
-reproduced into a new directory rather than resumed as a working build.
+```bash
+python3 -B -u -m pipeline.ingestion.poll_entur_netex \
+  --zip-only --remove-national-after-validation
 
-## Manual ZIP ingestion
-
-Import an existing national or KOL + AKT ZIP without downloading it again:
-
-```sh
 python3 -B -u -m pipeline.ingestion.ingest_local_zip \
-  --source entur_netex_snapshots/kol_agder_2026/zip/KOL_AKT_netex_20260115.zip \
-  --date 2026-01-15
+  --source /path/to/source.zip --date 2026-01-15 --zip-only
 ```
 
-The input is preserved. The new run retains the original ZIP, selected XML,
-checksums, lineage and validation results. Repeated uploads with the same ZIP
-bytes, date and providers refer to the validated first import. See
-[manual ingestion and duplicate handling](docs/manual_ingestion.md).
+A selected ZIP retains the original KOL + AKT XML and required national stops.
+National ZIP removal happens only after successful validation. Failed sources
+and original manual uploads remain. Historical `--resume` verifies the recorded
+source and outputs before reuse. The older `download_entur_netex` CLI remains a
+low-level download/Kolumbus-only diagnostic tool; the combined generator above
+is the normal project ingestion path.
 
-## Automatic ingestion
+See [manual ingestion](docs/manual_ingestion.md),
+[ZIP storage and migration](docs/storage_maintenance.md) and
+[full-month rebuilding](docs/full_month_processing.md).
 
-The live workflow on `main` requests ingestion at **08:23 UTC on days 1, 4, 7,
-and so on each month** (`23 8 */3 * *`), using the previous day's archive in Oslo.
-This resets at month boundaries rather than keeping an exact 72-hour interval. It collects KOL,
-AKT and shared reference XML. GitHub triggers the job; a
-**self-hosted Linux runner on the school server** executes it. A manual
-**Run workflow** option is included. See [runner setup, storage and validation details](docs/scheduled_ingestion.md).
+## Processing and GUI on Spark
 
-Every push to `main` also triggers the full ingestion workflow automatically.
+Processing uses PySpark 4.2.0 and Java 17, with dependencies in
+`requirements-processing.txt`. The school scripts use `~/spark-env` and the
+configured Java runtime. The GUI has its own `~/dat535-gui-env`, installed from
+`requirements-gui.txt`; it reads Parquet without starting Spark.
 
-```sh
-python3 -B -m pipeline.ingestion.poll_entur_netex --check-only
-python3 -B -u -m pipeline.ingestion.poll_entur_netex
+```bash
+bash scripts/run_processing.sh \
+  --manifest /path/to/ingestion/metadata/manifest.json \
+  --data-root /srv/dat535/data
+
+bash scripts/run_route_history.sh --data-root /srv/dat535/data
+bash scripts/run_gui.sh
 ```
 
-Local development runs default to `data/bronze/entur/`. Scheduled runs use
-`DAT535_DATA_ROOT/bronze/entur/` on persistent server storage, outside the checkout.
-Set the repository variable `DAT535_DATA_ROOT` to an existing writable server
-directory, and register the runner with labels `self-hosted`, `linux`, `dat535`.
-Raw data stays on the server; only a report copy is uploaded as a GitHub artifact.
-Scheduled runs remove the fetched national ZIP after successful extraction and
-validation. Selected raw XML, the selected ZIP, checksums and source generation
-remain. Failed sources are retained for inspection. Full ingestion requires
-at least 2 GiB free. For the same cleanup in a manual polling command, add
-`--remove-national-after-validation`; without that flag the CLI keeps the national ZIP.
-Repeated runs can retain the same daily archive more than once; cross-run
-duplicate detection is not implemented yet.
+Forward server port **8501** through VS Code Remote SSH or SSH and open
+`http://localhost:8501`. `bash scripts/run_gui.sh --restart` stops this app on its
+configured port and starts it in the background. Its log is
+`DAT535_DATA_ROOT/metadata/gui.log`. See the [GUI guide](app/README.md).
 
-## XML to Parquet
+## GitHub Actions
 
-The complete checkpointed processing command and current Silver/Gold contracts
-are documented in [processing pipeline](docs/processing_pipeline.md). It adds
-shared calendar/stop projections, validated joins, quarantine tables and
-reconciled planned-service metrics. Route changes across snapshots are described
-in [route history](docs/route_history.md); the GUI remains to build.
+[The workflow](.github/workflows/ingest-netex.yml) runs on pushes to `main`, manual
+dispatches and cron `23 8 */3 * *`: 08:23 UTC on days 1, 4, 7, and so on each
+month. This resets monthly; it is not an exact 72-hour interval. The self-hosted
+runner requires labels `self-hosted`, `linux`, `dat535`, and repository variable
+`DAT535_DATA_ROOT` pointing to writable persistent storage outside its checkout.
 
-The first Spark job reads provider CompositeFrames directly from NeTEx XML and
-writes staging Parquet for frames, lines, service journeys and ordered passing
-times. It retains source/frame context and checks counts against Bronze
-validation and Parquet read-back. See [XML-to-Parquet processing](docs/xml_to_parquet.md)
-for commands, schema scope and remaining projections.
+Successful runs ingest yesterday's Oslo-dated archive, consolidate verified
+storage duplicates, test and process the snapshot, update history, then restart
+the GUI. Only metadata reports are uploaded to GitHub. Failed processing does
+not restart the GUI. See [workflow and runner setup](docs/scheduled_ingestion.md).
 
-Ingestion uses only the standard library; processing requires PySpark 4.2.0
-(`requirements-processing.txt`) and Java 17 or newer.
+## Verification and project records
 
-## Verification
-
-```sh
-python3 -B -m unittest discover -s tests -v
+```bash
+python3 -B -m unittest discover -s tests -t . -v
+bash scripts/run_tests.sh -v
 ```
 
-Dataset files and generated outputs are ignored by Git. The source investigation
-is recorded in the [audit](docs/audit/2026-10-22/README.md) and
-[downloader follow-up](docs/audit/2026-10-22/downloader_followup.md). The duplicated,
-misdated 2025 payloads are excluded from the project dataset.
+The first command runs dependency-free tests and skips optional integrations
+when their dependencies are absent. The second uses the configured Spark
+environment and requires PySpark. For GUI tests, use the GUI environment:
+
+```bash
+~/dat535-gui-env/bin/python -B -m unittest discover -s tests/gui -t . -v
+```
+
+[Processing contracts](docs/processing_pipeline.md),
+[data quality](docs/data_quality.md), [route history](docs/route_history.md),
+[project task plan](docs/task_readme.md), and the
+[project journal](docs/project_journal.txt) describe implementation and decisions.
+Dated validation reports and journal entries retain their historical scope;
+older seven-day results are not evidence for the rebuilt full-month totals.

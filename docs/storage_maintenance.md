@@ -105,7 +105,7 @@ the branch in `~/dat535-project` updates manual commands, not the Actions checko
 
 ## Previous XML-only cleanup
 
-`pipeline.bronze_storage` remains available for checksum-verified hardlink
+`pipeline.storage.maintenance` remains available for checksum-verified hardlink
 consolidation of expanded datasets. Its `--discard-provider-zips` option only
 applies to redundant ZIP copies: it explicitly refuses to discard an archive
 marked `raw_storage="zip"`. Do not use an older version of that command after

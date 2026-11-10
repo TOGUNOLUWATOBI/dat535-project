@@ -10,7 +10,7 @@ From the cloned project directory:
 ```sh
 python3 -B -u -m pipeline.ingestion.ingest_local_zip \
   --source entur_netex_snapshots/kol_agder_2026/zip/KOL_AKT_netex_20260115.zip \
-  --date 2026-01-15
+  --date 2026-01-15 --zip-only
 ```
 
 The date is required. It is a user-supplied claim, not inferred from the filename
@@ -21,14 +21,19 @@ For an existing archive on the school server, after deploying this module:
 
 ```sh
 python3 -B -u -m pipeline.ingestion.ingest_local_zip \
-  --source /srv/dat535/data/bronze/entur/kol_akt_2026_01_09/zip/KOL_AKT_netex_20260115.zip \
+  --source /srv/dat535/data/bronze/entur/kol_akt_2026_01_09/zip/selected_netex_20260115.zip \
   --date 2026-01-15 \
-  --output /srv/dat535/data/bronze/entur/manual-january-check-001
+  --output /srv/dat535/data/bronze/entur/manual-january-check-001 \
+  --zip-only
 ```
 
 An explicit output directory must be new. Without `--output`, a unique run is
 created below `data/bronze/entur/`. Server invocations should supply persistent
 storage outside the checkout.
+
+The selected ZIP filename can differ between direct ingestion and migration.
+Use the `combined_zip` path recorded in that snapshot's manifest rather than
+guessing the name. The server example above uses the migrated January archive.
 
 ## What is kept and checked
 
@@ -36,6 +41,11 @@ The input is never modified. A new import copies its original ZIP byte for byte,
 records SHA-256, MD5 and byte size, checks every member's CRC, and rejects unsafe
 paths, symbolic links and duplicate member names. It then reuses the existing
 provider extraction and reference validator. Selected XML is not rewritten.
+
+With `--zip-only`, the selected XML stays inside its verified ZIP; its expanded
+working copy is released after validation. Processing restores it temporarily.
+The original uploaded archive remains. Without this option the API retains both
+the selected ZIP and expanded XML for compatibility with earlier callers.
 
 The archive must contain line XML and ordinary shared data for every requested
 provider, plus `_stops.xml`. Flexible shared data is retained when present.

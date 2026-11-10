@@ -1,5 +1,19 @@
 # Verified full-month coverage
 
+## School-server completion — 10 November 2026
+
+The server rebuild `monthly-67b04d35cf56` completed all **22 jobs**. Its coverage
+audit passed for every month from **January through November 2026**. Route history
+was recorded at `gold/entur/history/d5d5ea417f73a691/history-53300d0ab697` under
+`/srv/dat535/data`. The user supplied the completed report summary and a disk
+check showing **20 GiB free**, with root disk use at 47 percent.
+
+These checks establish completed jobs and calendar coverage, not actual vehicle
+operations or 11 sets of independently recounted monthly totals. The detailed
+departure totals below are the separately verified January–September local run.
+
+## Detailed local verification — January–September
+
 Verified locally on 10 November 2026 from the rebuilt KOL + AKT dataset.
 Nine primary exports and nine calendar-support exports cover all 273 operating
 dates (546 provider/date pairs). All 18 Gold publication gates passed.
@@ -39,5 +53,5 @@ Local data root: `data/monthly_2026_01_09` (generated, not in Git).
 Rebuild audit: `data/monthly_2026_01_09/rebuilds/monthly-bb78e2091c9b/manifest.json`.
 Route-history output: `data/monthly_2026_01_09/gold/entur/history/cf56da4ff430d375/history-6ca77aeab099`.
 The saved CSV is `data/monthly_2026_01_09/monthly_service_verified.csv`.
-This verifies the local rebuild; deployment and regeneration on the school
-server are separate. See [server commands](full_month_processing.md).
+This section records the local rebuild; the later school-server completion is
+recorded above. See [server commands](full_month_processing.md).

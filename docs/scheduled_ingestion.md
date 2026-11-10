@@ -145,7 +145,7 @@ separate, and full XSD/calendar validation is still outside these checks.
 
 Evidence is saved on the server as
 `metadata/manual_ingestion_test.json` inside that run. A small local copy is at
-[`audit/2026-10-24/manual_ingestion_test.json`](audit/2026-10-24/manual_ingestion_test.json).
+`docs/audit/2026-10-24/manual_ingestion_test.json` (local evidence, ignored by Git).
 This evidence covers the manual CLI. The later manual GitHub Actions dispatch
 also passed, as recorded above. A later existing-ZIP CLI/service was implemented
 and tested locally on 28 October; see [manual ZIP ingestion](manual_ingestion.md).
@@ -220,16 +220,20 @@ without repository activity. See [GitHub's schedule documentation](https://docs.
    expected size and MD5. Download that exact object generation.
 3. Verify source size, MD5, SHA-256 and the national ZIP's member CRCs.
 4. Select `KOL_*`, `AKT_*`, their provider shared XML, and the full `_stops.xml`.
-   Store original XML without rewriting it; scheduled XML-only mode creates no compact ZIP.
+   Keep the original selected XML bytes in a verified compact ZIP (`--zip-only`).
 5. Reuse our XML parsing, publication-date and provider reference checks. Record
    source repeats as warnings; missing provider references fail the run.
-6. Remove the fetched national ZIP only after extraction and validation pass.
-   Keep selected XML, metadata, source URL, generation and checksums. Consolidate
+6. Remove the fetched national ZIP only after extraction, validation and compact-ZIP verification pass.
+   Keep the selected ZIP, metadata, source URL, generation and checksums. Consolidate
    checksum-verified identical files through hardlinks, preserving every path.
    Failed or interrupted sources are retained. Upload a copy of the report to GitHub.
    Failed validation marks the server manifest as failed and fails the job;
    downstream processing must accept only `complete` or `complete_with_warnings`
    manifests.
+7. Test and process the snapshot through staging, Silver and Gold. Restore its
+   XML temporarily from the selected ZIP and release that verified working copy
+   afterwards. Update route history, then call `scripts/run_gui.sh --restart`.
+   Failed processing does not restart the GUI; metadata reports still upload.
 
 The checks are not full NeTEx XSD, profile or calendar validation. Registry-only
 reference diagnostics are reported separately from provider reference failures.

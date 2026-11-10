@@ -10,6 +10,11 @@ two generated files:
 * [`quality_traces.md`](quality_traces.md): four journeys traced from the source
   XML through Silver to Gold.
 
+These are dated seven-day baseline reports. They remain regression evidence;
+their counts are not the rebuilt full-month totals. Current calendar coverage
+is recorded in [monthly coverage](monthly_coverage.md). Regenerate quality
+reports against the desired published outputs when preparing current results.
+
 ## What is measured
 
 `pipeline/quality/silver_profile.py` profiles a completed Silver output per

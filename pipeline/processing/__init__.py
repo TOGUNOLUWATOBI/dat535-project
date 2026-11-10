@@ -1,1 +1,1 @@
-"""Planned structured parsing and PySpark transformations."""
+"""NeTEx staging and Spark transformations through Silver and Gold."""

@@ -1,118 +1,98 @@
 # Project directory structure
 
+The repository contains source, configuration, operational commands, tests and
+human-readable evidence. Large source datasets, processing outputs and local
+environments are ignored by Git. This map describes the current implementation;
+older journal entries retain the paths used at the time.
+
 ```text
 dat535-project/
 ├── README.md
 ├── .gitignore
-├── requirements-processing.txt       PySpark 4.2.0 for staging jobs
+├── requirements-processing.txt      PySpark 4.2.0
+├── requirements-gui.txt             Streamlit, pandas, PyArrow and Altair
 ├── .github/
-│   ├── actionlint.yaml                Recognize the custom school runner label
-│   └── workflows/
-│       └── ingest-netex.yml           Automatic jobs on the school Linux runner
-├── pipeline/                         Python package
-│   ├── checkpoints.py                SQLite attempt history and verified reuse
-│   ├── run_snapshot.py               Checkpointed historical/API/manual processing
-│   ├── ingestion/                    Implemented source acquisition tools
-│   │   ├── download_entur_netex.py
+│   ├── actionlint.yaml              School runner label for workflow linting
+│   └── workflows/ingest-netex.yml    Ingest → process → history → GUI restart
+├── .streamlit/config.toml           GUI theme
+├── app/
+│   ├── gold_app.py                  Pages and interaction
+│   ├── analytics.py                 Daily/monthly analysis and comparisons
+│   ├── data.py                      Read-only Gold/history access
+│   └── README.md
+├── config/
+│   ├── quality_thresholds.json       Gold publication rules
+│   ├── route_renumberings.json       Sourced route replacement evidence
+│   ├── route_discontinuations.json   Sourced discontinuation evidence
+│   └── README.md
+├── pipeline/
+│   ├── run_snapshot.py              Checkpointed staging → Silver → Gold
+│   ├── rebuild_monthly.py           Calendar support, sequential batch and coverage
+│   ├── batch_worker.py              One Spark process per batch operation
+│   ├── spark_runtime.py             Heap settings and safe failure reporting
+│   ├── checkpoints.py               Snapshot identities, locks and verified reuse
+│   ├── ingestion/
+│   │   ├── download_entur_netex.py   Source HTTP helpers and older KOL diagnostics
 │   │   ├── generate_provider_dataset.py
-│   │   ├── ingest_local_zip.py        Import and validate existing ZIPs
-│   │   └── poll_entur_netex.py        Collect one new dated snapshot
-│   ├── processing/                   Spark staging, first Silver and Gold processing
-│   │   ├── bronze/                   XML-to-Parquet conversion and source lineage
-│   │   │   ├── xml_to_parquet.py      Spark conversion and Parquet read-back checks
-│   │   │   ├── snapshot_to_parquet.py Complete provider/shared/stop projection
-│   │   │   ├── netex_schema.py        Explicit nested entity schemas
-│   │   │   └── staging_sources.py     Validated manifest and source selection
-│   │   ├── silver/                   build.py joins/quality; calendars.py date rules
-│   │   └── gold/                     build.py planned-service metrics
-│   ├── storage/                      Planned database publication
-│   ├── quality/                      silver_profile.py gate; report.py table; trace.py XML→Gold checks
-│   └── analysis/                     route_history.py changes/versions; inspect_history.py
-├── app/                              Streamlit Gold explorer (gold_app.py pages, data.py access)
-├── config/                           Configuration conventions
-├── scripts/                          run_processing.sh, run_route_history.sh, inspect_route_history.sh
+│   │   ├── ingest_local_zip.py
+│   │   ├── poll_entur_netex.py
+│   │   └── prepare_monthly_support.py
+│   ├── processing/
+│   │   ├── bronze/                  Explicit schemas, source selection and XML projection
+│   │   ├── silver/                  References, calendars, cleaning and quarantine
+│   │   ├── gold/                    Reconciled planned-service metrics
+│   │   └── windows.py               Service-window rules
+│   ├── storage/
+│   │   ├── zip_bronze.py            ZIP migration, verification and temporary extraction
+│   │   └── maintenance.py           Verified hardlink consolidation and legacy cleanup
+│   ├── quality/                     Profiles, gates and independent XML traces
+│   └── analysis/                    Route-history construction and inspection
+├── scripts/                         Processing, rebuild, inspection, testing and GUI commands
 ├── tests/
-│   ├── ingestion/                    Acquisition/generation regression tests
-│   ├── processing/                   Source selection and actual Spark tests
-│   └── analysis/                     Route-history rules and a small full run
-├── docs/
-│   ├── task_readme.md                 Project scope and task breakdown
-│   ├── project_journal.txt            Running account of decisions and progress
-│   ├── directory_structure.md         This directory map
-│   ├── scheduled_ingestion.md         School runner setup and persistent storage
-│   ├── manual_ingestion.md            Existing ZIP imports and repeat uploads
-│   ├── xml_to_parquet.md              Spark staging schemas, checks and usage
-│   ├── processing_pipeline.md        Checkpoints, Silver/Gold contracts and server commands
-│   └── audit/                        Historical investigation and build evidence
-├── entur_netex_snapshots/             Existing source dataset, ignored by Git
-│   └── kol_agder_2026/
-│       ├── README.md
-│       ├── xml/                      Original XML grouped by snapshot date
-│       ├── zip/                      Nine compact copies of the XML snapshots
-│       └── metadata/                 Manifests, checksums, lineage and reports
-└── data/                             Local development outputs, ignored by Git
+│   ├── ingestion/                   Source acquisition and manual-import regressions
+│   ├── processing/                  XML, calendars and real Spark integration
+│   ├── analysis/                    History, route versions and evidence rules
+│   ├── storage/                     ZIP retention, restoration and maintenance
+│   ├── quality/                     Publication gates and independent XML checks
+│   ├── gui/                         Gold readers, analysis and Streamlit interactions
+│   └── test_*.py                    Checkpoints, workers and service-window contracts
+├── docs/                            Operations, project plan, journal and validation evidence
+└── data/                            Ignored local outputs
     ├── README.md
-    ├── bronze/entur/                 New ingestion runs with raw XML and metadata
-    ├── staging/                      Parsed entity tables
-    ├── silver/                       Validated structured data
-    ├── gold/                         Analytical outputs
-    └── quarantine/                   Rejected data with reasons
+    ├── bronze/
+    ├── staging/
+    ├── silver/
+    └── gold/
 ```
 
-Python package directories also contain `__init__.py`. Data output directories
-contain `.gitkeep` placeholders. Complete staging and the first Silver/Gold
-slice and route history are implemented. Database publication and the
-GUI remain to build. Automatic ingestion is configured in
-GitHub Actions for a self-hosted Linux runner. The runner and persistent storage
-are configured on `spark`; all 68 current tests passed there with Java 17 and
-PySpark 4.2.0. The ingestion workflow is on `main`, and a full manual Actions run passed.
-Three successful `schedule` runs were verified overnight on 27–28 October.
-The earlier five-minute test produced runs hours apart. The current schedule
-requests 08:23 UTC on days 1, 4, 7, and so on each month; it resets monthly.
+Python package markers (`__init__.py`) are retained where needed for imports
+and recursive unittest discovery. Rejected records are `quarantine_*` tables
+inside each Silver output, rather than a separate top-level quarantine folder.
 
-Scheduled runs write outside the repository, under the configured absolute
-`DAT535_DATA_ROOT/bronze/entur/` on the school server. That location retains raw
-archives, XML, compact ZIPs and metadata across checkouts. The local `data/`
-directory above is the development default, not the scheduled storage location.
+## Persistent data on the school server
 
-## Working in the structure
-
-Run commands from the project root. The existing Python tools have moved into
-`pipeline/ingestion/` and are invoked as modules:
-
-```sh
-python3 -B -m pipeline.ingestion.download_entur_netex --help
-python3 -B -m pipeline.ingestion.generate_provider_dataset --help
-python3 -B -m pipeline.ingestion.poll_entur_netex --help
-python3 -B -m pipeline.ingestion.ingest_local_zip --help
-python3 -B -m pipeline.processing.bronze.xml_to_parquet --help
-python3 -B -m unittest discover -s tests -v
+```text
+/srv/dat535/data/
+├── bronze/entur/                    Selected raw ZIPs, lineage and validation
+├── staging/entur/                   Parsed entity Parquet and source context
+├── silver/entur/                    Cleaned and quarantined records
+├── gold/entur/                      Published metrics and route history
+├── rebuilds/monthly-*/              Batch progress and worker results
+├── metadata/                       Cleanup reports and operational logs
+└── pipeline_state.sqlite3           Checkpoint registry, not transport facts
 ```
 
-The source dataset stays in its existing location; it has not been moved or
-re-extracted. Process the dates listed in its `metadata/manifest.json` rather than
-scanning the entire project for XML files. Keep original source XML unchanged and
-write derived tables into `data/`.
+ZIP-backed raw XML is restored at its original paths for one operation and
+released after verification. Original manual uploads and failed sources remain.
+See [storage maintenance](storage_maintenance.md) before changing raw retention.
 
-Manual ZIP imports keep an exact uploaded copy, selected XML and validation
-metadata in a new Bronze run. A shared `_manual_ingestions.sqlite3` metadata
-index detects repeated manual uploads. See [manual ingestion](manual_ingestion.md).
-The new manual path passed all 40 ingestion tests locally on Python 3.11 and
-3.14; the real January ZIP and a repeat upload were also checked locally.
+Run commands from the project root. Use the module paths in the root
+[README](../README.md), [scripts guide](../scripts/README.md) and
+[processing contracts](processing_pipeline.md). Storage maintenance now lives
+at `python3 -m pipeline.storage.maintenance`; historical journal commands may
+refer to its earlier `pipeline.bronze_storage` location.
 
-Developer A's main implementation area is `pipeline/processing/` and
-`pipeline/analysis/`. Developer B's main areas are `pipeline/ingestion/`,
-`pipeline/storage/`, `app/`, `config/`, and `scripts/`. Both contribute to Silver
-and its tests, as described in the project plan.
-
-Current acquisition code uses the Python standard library and runs directly from
-the project root without package installation. Spark processing dependencies are
-listed in `requirements-processing.txt`; the new staging job requires PySpark
-4.2.0 and Java 17 or newer. Streamlit and database drivers remain to add. Configuration
-loading, database storage, downstream orchestration and GUI execution are still
-planned work. See [automatic ingestion](scheduled_ingestion.md) for the implemented
-schedule and persistent server storage.
-
-Audit reports describe the project at the time of each investigation. Historical
-paths and commands in those records may refer to the earlier layout; current
-commands and paths are documented here and in the root README.
+The local `entur_netex_snapshots/kol_agder_2026/` directory is preserved and
+ignored. It is not included when cloning the GitHub repository. Local generated
+`data/` contents and virtual environments are also preserved, not deleted by
+repository cleanup. [The task plan](task_readme.md) records team responsibilities.

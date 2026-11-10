@@ -6,7 +6,7 @@ manifests and the requested months; coverage must pass before completion.
 """
 
 import argparse
-from datetime import date, timedelta
+from datetime import timedelta
 import json
 import os
 from pathlib import Path

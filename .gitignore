@@ -11,6 +11,19 @@ __pycache__/
 .DS_Store
 build/
 dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated archives, tables, state and logs, including accidental root outputs.
+*.zip
+*.parquet
+*.sqlite3
+*.sqlite3-*
+*.sqlite3.locks/
+*.log
+*.part
 
 # Generated pipeline outputs; keep the documented directory skeleton
 /data/**/*

@@ -19,21 +19,6 @@ def percentage_change(before, after):
     return (after - before) / before * 100 if before else None
 
 
-def network_series(daily, items, providers=None, mode="all"):
-    """Counts for every selected provider/export, including a mode with zero service."""
-    selected = select_service(daily, providers, mode)
-    operators = sorted(providers if providers is not None else
-                       {p for item in items for p in item["gold_manifest"]["providers"]})
-    dates = [item["snapshot_date"] for item in items]
-    index = pd.MultiIndex.from_product([dates, operators], names=["snapshot_date", "provider"])
-    grouped = selected.groupby(["snapshot_date", "provider"]).agg(
-        departures=("scheduled_departures", "sum"), active_lines=("line_entity_id", "nunique"))
-    result = grouped.reindex(index, fill_value=0).reset_index()
-    windows = {item["snapshot_date"]: f"{item['service_from']} – {item['service_to']}" for item in items}
-    result["window"] = result.snapshot_date.map(windows)
-    return result
-
-
 def compare_exports(daily, before, after, providers=None, mode="all", line_snapshots=None):
     """Compare fixed departures by provider and NeTEx line ID, without guessing renumberings."""
     if before >= after:
@@ -83,18 +68,6 @@ def daily_profile(selected, item):
     result = result.reset_index()
     result["weekday"] = result.service_date.dt.day_name()
     return result
-
-
-def weekday_comparison(daily, items, before, after, providers=None, mode="all"):
-    """Compare weekdays using mean departures per calendar day, including zero-service days."""
-    selected = select_service(daily, providers, mode)
-    windows = {item["snapshot_date"]: item for item in items}
-    frames = []
-    for snapshot in (before, after):
-        profile = daily_profile(selected, windows[snapshot])
-        grouped = profile.groupby("weekday").departures.mean().reindex(WEEKDAYS)
-        frames.append(grouped.rename("departures").reset_index().assign(snapshot_date=snapshot))
-    return pd.concat(frames, ignore_index=True)
 
 
 def daily_month(daily, items, month, providers=None, mode="all"):
@@ -164,6 +137,8 @@ def monthly_plan_rows(daily, items, month, providers=None, mode="all"):
     result = selected.merge(profile[profile.covered][["service_date", "source_export"]],
                             left_on=["service_date", "snapshot_date"],
                             right_on=["service_date", "source_export"], how="inner")
+    # The comparison groups by month; source_export keeps the actual observation
+    # date for each selected daily plan after replacing this grouping key.
     result["snapshot_date"] = month + "-01"
     return result, profile
 

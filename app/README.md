@@ -15,6 +15,12 @@ bash scripts/run_gui.sh          # http://localhost:8501 (VS Code forwards the p
 8501) and `DAT535_GUI_PYTHON` can be overridden. The app listens on
 127.0.0.1 only. Open it through SSH or VS Code port forwarding.
 
+The workflow calls `bash scripts/run_gui.sh --restart` after successful
+processing and route history. The same command can be run manually: it stops
+this app on its configured port, starts it in the background and writes
+`DAT535_DATA_ROOT/metadata/gui.log`. After a VM reboot, run the command or a
+successful workflow to bring the GUI back.
+
 | Page | Shows | Source |
 | --- | --- | --- |
 | Overview | Select a month, operator and mode; departures, active lines, daily mean and coverage | Reconstructed Gold daily plans |
@@ -52,9 +58,10 @@ The exclusion breakdown reads the retained rows of the selected Gold output.
 One occurrence is one journey on one operating date, not one XML file. Valid
 on-demand availability windows are separate from fixed departures. If older
 outputs lack complete type/validity flags, the GUI reports their reasons as
-unclassified instead of guessing. The verified January rerun records 23 valid
-on-demand occurrences and no invalid occurrences; the older local January
+unclassified instead of guessing. The historical seven-day January rerun recorded
+23 valid on-demand occurrences and no invalid occurrences; the older local January
 output has incomplete type flags and should not be used to infer their reasons.
+Those seven-day counts are not the full-month totals.
 
 Overview, daily service, comparisons and data checks work without route history. A single
 published export can be viewed; comparisons need two months. The GUI reads Gold from
@@ -76,5 +83,5 @@ calendar calculations, and `app/gold_app.py` holds the pages. Run their unit
 tests in the GUI environment:
 
 ```bash
-~/dat535-gui-env/bin/python -m unittest tests.test_gui_data tests.test_gui_analytics tests.test_gui_app -v
+~/dat535-gui-env/bin/python -m unittest tests.gui.test_data tests.gui.test_analytics tests.gui.test_app -v
 ```
