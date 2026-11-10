@@ -826,3 +826,29 @@ trace cases passed, including physical stops, calendar exceptions and flexible
 windows. The temporary processing files were removed afterwards; only the
 small evidence reports were kept. This is local verification, not a server
 deployment or a new verification of the other nine snapshots.
+
+
+10 November 2026 - History memory failure and releasing work between tables
+
+The workflow got through ingestion and Silver/Gold, then Java ran out of heap
+while building a broadcast join for stop coverage changes. This was not another
+full-disk incident. We were saving stop_coverage but still deriving its changes
+from the original lazy plan, which repeated the stop/name joins.
+
+History now reads that saved table for the comparison. It disables automatic
+broadcast joins (including the adaptive setting), uses a temporary disk-only
+cache to share each table's count and write, then unpersists it straight away.
+Failed writes also release the cache. Published outputs and failure evidence
+are kept; this is cleanup of Spark working data, not deletion of our source.
+The history manifest and Actions report now include heap settings and timings.
+
+We checked the actual failed run: ingestion 43 seconds, Spark tests 3 minutes
+36 seconds, snapshot processing 28 seconds, history 1 minute 47 seconds before
+failure. Tests were the largest part of the roughly seven-minute run.
+
+With a 1 GiB Java heap the larger synthetic case passed: 79,200 coverage rows
+and 636,933 national stop names over eleven snapshots, with exactly 3,000 stops
+gained and 3,000 lost in the service windows. All 104 tests passed across the
+Spark and GUI environments (101 in the Spark environment, 3 GUI tests run
+separately). We have not yet retried the full school-server dataset with this
+fix, so we do not claim a production speedup. Details are in docs/route_history.md.
