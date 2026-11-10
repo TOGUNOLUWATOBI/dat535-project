@@ -852,3 +852,32 @@ gained and 3,000 lost in the service windows. All 104 tests passed across the
 Spark and GUI environments (101 in the Spark environment, 3 GUI tests run
 separately). We have not yet retried the full school-server dataset with this
 fix, so we do not claim a production speedup. Details are in docs/route_history.md.
+
+
+10 November 2026 - Making the GUI easier to use, and adding comparisons
+
+The server retry worked, and we moved on to the GUI. We wanted both a clearer
+layout and something more useful to analyse, rather than just changing colours.
+The overview now has an export selector and operator/mode filters that change
+the cards as well as the chart. Dates have real calendar spacing, so the gap
+between September and November does not look like one ordinary monthly step.
+
+We added Compare exports for any earlier/later pair. It shows departure totals,
+absolute and percentage changes, a weekday profile and line-by-line changes.
+The weekday comparison includes days with no service. A zero earlier total
+does not get an invented percentage. Lines are matched by provider and NeTEx
+ID; this page does not guess replacements. Those still need verified operator
+evidence on Replaced lines. The comparison and daily line profile can be saved
+as CSV files.
+
+The line page now separates service, observed versions, changes and stops into
+tabs. We also added a refresh button and show how far the history has reached.
+Overview can work with one published Gold export and no history yet, and the
+GUI no longer needs the Silver files just to find those exports. It still reads
+the checkpoint registry without writing to it, and needs no Spark session.
+
+We checked all six pages with synthetic published data, including empty mode
+filters and missing history. Twenty GUI data, analysis and interaction tests
+passed. The local
+layout preview on port 8502 is labelled synthetic; it is not a new result from
+the school server. This entry records local GUI changes, not a deployment.
