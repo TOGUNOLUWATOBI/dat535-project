@@ -15,7 +15,7 @@ runs after `scripts/run_processing.sh`.
   `first_observed`, `last_observed`, `previous_snapshot` and
   `first_not_observed`, never `valid_from`. Effective dates come only from an
   operator source, quoted in the evidence files. (Silver expands calendars only
-  inside each seven-day Gold window, so the pipeline has no effective date of
+  inside each declared Gold window, so the pipeline has no effective date of
   its own.)
 * **Disappeared is not retired.** A line missing from the next export is
   `disappeared` (no longer observed). `line_transitions.interpretation` calls it
@@ -32,7 +32,9 @@ runs after `scripts/run_processing.sh`.
   bus-only figures. Flexible (on-demand) services are not in the departure
   totals, as in Gold.
 * Everything describes **planned** timetables, not vehicles that ran.
-  Departures are for each snapshot's seven-day Gold window, not whole months.
+  Departures use each primary export's declared window (now a full calendar month).
+  Calendar-support exports fill the GUI's monthly reconstruction without adding
+  observations to the route-history sample. See [full-month processing](full_month_processing.md).
 
 ## Running it
 

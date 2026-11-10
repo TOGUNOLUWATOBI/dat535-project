@@ -907,3 +907,44 @@ plans together or fill missing lines from older plans. All 26 GUI tests passed,
 including overlap, future-export, missing-coverage and exclusion cases. No raw
 data or processing window was changed. Full-month coverage remains a separate
 processing step, subject to the source calendars and observation dates.
+
+
+10 November 2026 - Correcting the seven-day limit and actually rebuilding months
+
+The seven-day window was our implementation choice. It was not what we needed:
+we want every calendar date in each month. Changing the GUI alone was not enough.
+We changed the default Silver expansion to the first through the last day of the
+month, including February, and added a provider/date spine in Gold.
+
+There was another catch in the actual XML. Most 15 January frames only declare
+validity from 12 or 13 January. We could not just fill the earlier days with
+zeroes. We downloaded additional early exports and checked their XML, references
+and validity. The 1 and 2 February sources have an unresolved quay reference,
+NSR:Quay:43289. Those failed copies were kept. The validated 14 January export
+does cover February's calendars, so it supplies the early February plan, with
+its original observation date shown in the daily results.
+
+Calendar-support sources do not add observations to our original route-history
+sample. That keeps the verified June-to-July mappings meaningful. They fill
+daily plans where the main export has no valid coverage. One whole export is
+selected per date, independently of operator and mode filters; overlapping
+plans are never added together. Overview, comparisons and line profiles now
+use that same monthly reconstruction, not only the primary export's partial
+counts. Unknown dates remain different from valid zero-service dates.
+
+We rebuilt all nine primary plans and nine support plans locally, into the
+separate data/monthly_2026_01_09 root. All 18 Gold gates passed. Every one of the
+273 January-to-September dates is covered for both providers: 546 provider/date
+pairs and 1,918,707 planned fixed departures in the reconstruction. January is
+31/31 dates, February 28/28. The seven GUI pages also passed against this real
+data, and route history completed with the original nine primary observations.
+All 140 tests passed across the GUI and Spark environments, including the 19
+Spark cases skipped in the GUI environment. We also rechecked the saved file
+inventories for all 54 completed staging, Silver and Gold attempts.
+The counts and audit paths are in docs/monthly_coverage.md.
+
+Old outputs and every raw source were preserved. scripts/rebuild_monthly.sh
+records progress and can reuse compatible completed checkpoints; it also
+refuses to call the rebuild complete if the date coverage audit has gaps.
+This was a local rebuild. The forwarded school-server GUI still needs the
+new code and its own rebuild; we have not used the expired SSH access window.

@@ -98,7 +98,9 @@ of invalid records. Consumers must filter valid records or use Gold.
 
 ## Calendars, time and flexible services
 
-The default analysis window is the snapshot date through six days later.
+The default analysis window is the full calendar month containing the snapshot
+date, from its first to its last day. For migration, source validity, calendar
+support and the per-date coverage audit, see [full-month processing](full_month_processing.md).
 `--service-from` and `--service-to` select an explicit window of up to 366 days.
 These are service dates described by that snapshot, not a claim of complete
 daily observation throughout the nine months. Snapshot date and service date
@@ -125,7 +127,8 @@ classified separately and excluded from fixed-departure frequency metrics.
 
 ## Gold and verification
 
-Gold contains daily departures per line, a service-window summary, planned stop
+Gold contains daily departures per line, a provider/date network spine with
+source-coverage flags, a service-window summary, planned stop
 coverage for eligible journeys and excluded service-date records. Summary
 averages divide by all calendar days in the declared window, including days
 without service. Daily departure totals must equal eligible fixed-service

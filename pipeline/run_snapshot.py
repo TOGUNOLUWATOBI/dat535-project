@@ -10,6 +10,7 @@ import sys
 
 from pipeline.checkpoints import Checkpoints, digest, identity
 from pipeline.processing.bronze.staging_sources import load_snapshot_sources
+from pipeline.processing.windows import service_window
 
 
 def implementation(*paths):
@@ -21,7 +22,7 @@ QUALITY_THRESHOLDS = "config/quality_thresholds.json"
 
 
 def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold", service_from=None, service_to=None,
-                 thresholds_path=None):
+                 thresholds_path=None, history_role="primary"):
     from pipeline.processing.bronze.snapshot_to_parquet import convert_snapshot
     from pipeline.processing.silver.build import build_silver
     from pipeline.processing.gold.build import build_gold
@@ -34,6 +35,7 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
         raise ValueError("Persistent data root must not be inside the source manifest directory")
     # Check every input hash before trusting any previously completed stage.
     selection = load_snapshot_sources(manifest, day)
+    service_from, service_to = service_window(selection["snapshot_date"], service_from, service_to)
     state = Checkpoints(state_path or data_root / "pipeline_state.sqlite3")
     try:
         key = state.register(selection)
@@ -41,7 +43,8 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
             versions = {
                 "staging": implementation("pipeline/processing/bronze/snapshot_to_parquet.py", "pipeline/processing/bronze/netex_schema.py",
                     "pipeline/processing/bronze/xml_to_parquet.py", "pipeline/processing/bronze/staging_sources.py"),
-                "silver": implementation("pipeline/processing/silver/build.py","pipeline/processing/silver/calendars.py"),
+                "silver": implementation("pipeline/processing/silver/build.py","pipeline/processing/silver/calendars.py",
+                                         "pipeline/processing/windows.py"),
                 # The gate code and its thresholds decide whether Gold publishes, so a change to
                 # either rebuilds Gold (Silver is reused).
                 "gold": identity([implementation("pipeline/processing/gold/build.py",
@@ -57,9 +60,9 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
                 lambda output: convert_snapshot(spark,manifest,output,day,selection))
             outputs["staging"] = {"path":str(staging),"reused":reused}
             if through == "staging": return outputs
-            silver_input = identity([staged_sha,str(service_from),str(service_to)])
+            silver_input = identity([staged_sha,str(service_from),str(service_to),history_role])
             silver, silver_sha, reused = state.execute(key,"silver",silver_input,versions["silver"],destination("silver"),
-                lambda output:build_silver(spark,staging,output,service_from,service_to))
+                lambda output:build_silver(spark,staging,output,service_from,service_to,history_role))
             outputs["silver"] = {"path":str(silver),"reused":reused}
             if through == "silver": return outputs
             gold, _, reused = state.execute(key,"gold",silver_sha,versions["gold"],destination("gold"),
@@ -78,8 +81,10 @@ def main():
     parser.add_argument("--data-root",type=Path,required=True)
     parser.add_argument("--state",type=Path)
     parser.add_argument("--through",choices=("staging","silver","gold"),default="gold")
-    parser.add_argument("--service-from",type=date.fromisoformat)
-    parser.add_argument("--service-to",type=date.fromisoformat)
+    parser.add_argument("--service-from",type=date.fromisoformat, help="Override the first day (default: first of snapshot month)")
+    parser.add_argument("--service-to",type=date.fromisoformat, help="Override the last day (default: last of snapshot month)")
+    parser.add_argument("--history-role",choices=("primary","calendar_support"),default="primary",
+                        help="Calendar-support exports fill service dates without changing the historical observation sample")
     parser.add_argument("--quality-thresholds",type=Path,help=f"Gold publication rules (default: {QUALITY_THRESHOLDS})")
     parser.add_argument("--master",default="local[2]")
     args=parser.parse_args()
@@ -100,7 +105,7 @@ def main():
         spark.sparkContext.setLogLevel("WARN")
         for day in days:
             print(json.dumps({"snapshot":str(day),"outputs":run_snapshot(spark,args.manifest,day,args.data_root,args.state,
-                args.through,args.service_from,args.service_to,args.quality_thresholds)},indent=2),flush=True)
+                args.through,args.service_from,args.service_to,args.quality_thresholds,args.history_role)},indent=2),flush=True)
         return 0
     except Exception as error:
         print(f"Pipeline failed: {type(error).__name__}: {error}",file=sys.stderr); return 1

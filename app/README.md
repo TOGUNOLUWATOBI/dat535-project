@@ -17,9 +17,9 @@ bash scripts/run_gui.sh          # http://localhost:8501 (VS Code forwards the p
 
 | Page | Shows | Source |
 | --- | --- | --- |
-| Overview | Select an export, operator and mode; see departures, active lines and a trend with calendar spacing | Gold `daily_line_service` |
+| Overview | Select a month, operator and mode; departures, active lines, daily mean and coverage | Reconstructed Gold daily plans |
 | Daily service | Select a month, operator and mode; departures and active lines by operating date, coverage and source export, daily CSV | Gold `daily_line_service`, published window metadata |
-| Compare exports | Any earlier/later pair: totals, percentage change, weekday profiles, line gains/losses and CSV | Gold `daily_line_service`, optional route-history names |
+| Compare months | Monthly totals, percentage change, daily means, weekday profiles, line gains/losses and CSV | Reconstructed Gold daily plans, optional route-history names |
 | One line | Search by number or place; service, observed versions, changes and stops in separate tabs; daily profile and CSV | Gold `daily_line_service`, route history |
 | What changed | Consecutive exports: lines appeared/disappeared, verified explanations and sources, largest departure changes, stops no longer served | Route history, `config/route_*.json` |
 | Replaced lines | A verified replacement: old/new departures and definition stops, with the operator source | Route history, `config/route_renumberings.json` |
@@ -29,24 +29,24 @@ The comparison matches lines by operator and NeTEx ID. It does not infer a
 replacement from similar numbers or a change in departures. Percentage change
 is undefined when the earlier total is zero. Weekday profiles average over
 calendar days, including days with no service. A new or missing service in a
-seven-day window does not establish that a route opened or closed; holidays
+service window does not establish that a route opened or closed; holidays
 and seasonal plans also affect counts.
 
 Daily service includes every calendar date in the selected month. A date is
-covered only if a published output's service window includes it and its export
-was observed on or before that date. Overlapping windows use the latest such
-export for the whole date; missing lines are not backfilled from older plans.
+covered only if a published output's window and source-calendar validity include
+it for the full provider selection. Overlapping windows use the latest such
+export for the whole date, even if observed later; missing lines are not
+backfilled from older plans. Selection is independent of UI filters.
 An uncovered date stays blank, while covered dates without matching service
 are zero. The mean uses covered dates only, and the coverage card shows the
 denominator. These stitched plans may come from different exports; they are
 not actual operations or a single month's timetable release.
 
-Historical outputs currently cover the 15th–21st of each sampled month, so
-they do **not** provide a complete daily series for those months. Wider calendar
-expansion can be built from retained XML in separate outputs, subject to the
-source's validity; a monthly archive alone does not establish what was
-published on earlier dates. This GUI change does not rerun the processing or
-alter its seven-day window.
+Processing now defaults to full calendar months. Older seven-day outputs need
+the [full-month rebuild](../docs/full_month_processing.md), including validated
+support exports for dates discarded from the 15th-of-month files. That rebuild
+preserves old files and records a provider/date coverage audit. Supporting sources
+do not change the original route-history observation sample.
 
 The exclusion breakdown reads the retained rows of the selected Gold output.
 One occurrence is one journey on one operating date, not one XML file. Valid
@@ -57,7 +57,7 @@ on-demand occurrences and no invalid occurrences; the older local January
 output has incomplete type flags and should not be used to infer their reasons.
 
 Overview, daily service, comparisons and data checks work without route history. A single
-published export can be viewed; comparisons need two. The GUI reads Gold from
+published export can be viewed; comparisons need two months. The GUI reads Gold from
 `pipeline_state.sqlite3` in read-only mode and does not require the Silver
 files. Exports must share a provider selection and service-window definition.
 The history pages use the latest complete history output and show its last

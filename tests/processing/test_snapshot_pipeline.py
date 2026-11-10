@@ -12,7 +12,7 @@ from pipeline.ingestion.download_entur_netex import file_checksums
 from pipeline.ingestion.generate_provider_dataset import validate_snapshot
 
 
-def complete_fixture(root,bad_time=False,bad_calendar=False):
+def complete_fixture(root,bad_time=False,bad_calendar=False,full_month=False):
     xml=root/'xml/2026-01-15';xml.mkdir(parents=True);metadata=root/'metadata';metadata.mkdir()
     def publication(body):return '<PublicationDelivery xmlns="http://www.netex.org.uk/netex" version="1.15:NO-NeTEx-networktimetable:1.5"><PublicationTimestamp>2026-01-15T00:00:00</PublicationTimestamp><dataObjects>'+body+'</dataObjects></PublicationDelivery>'
     for provider,number,flexible in [('KOL','007',False),('AKT','007',False),('AKT','008',False),('KOL','HentMeg',True)]:
@@ -30,6 +30,8 @@ def complete_fixture(root,bad_time=False,bad_calendar=False):
 <TimetabledPassingTime id="{provider}:Time:repeat" version="1"><StopPointInJourneyPatternRef ref="{provider}:Point:1"/>{timing1}</TimetabledPassingTime>
 <TimetabledPassingTime id="{provider}:Time:repeat" version="1"><StopPointInJourneyPatternRef ref="{provider}:Point:2"/>{timing2}</TimetabledPassingTime>
 </passingTimes></ServiceJourney></vehicleJourneys></TimetableFrame></frames></CompositeFrame>'''
+        if full_month:
+            body=body.replace('2026-01-15T00:00:00','2026-01-01T00:00:00').replace('2026-01-21T00:00:00','2026-01-31T00:00:00')
         (xml/f'{provider}_{number}.xml').write_text(publication(body))
     for p in ('KOL','AKT'):
         body=f'''<CompositeFrame id="{p}:CompositeFrame:shared" version="1"><frames><ServiceFrame id="{p}:ServiceFrame:shared" version="1"><scheduledStopPoints><ScheduledStopPoint id="{p}:Stop:1" version="1"><Name>First</Name></ScheduledStopPoint><ScheduledStopPoint id="{p}:Stop:2" version="1"/></scheduledStopPoints><stopAssignments><PassengerStopAssignment id="{p}:Assignment:1" version="1"><ScheduledStopPointRef ref="{p}:Stop:1" version="1"/><QuayRef ref="NSR:Quay:1"/></PassengerStopAssignment><PassengerStopAssignment id="{p}:Assignment:2" version="1"><ScheduledStopPointRef ref="{p}:Stop:2" version="1"/><QuayRef ref="NSR:Quay:2"/></PassengerStopAssignment></stopAssignments></ServiceFrame>
@@ -40,6 +42,8 @@ def complete_fixture(root,bad_time=False,bad_calendar=False):
 </dayTypeAssignments></ServiceCalendarFrame></frames></CompositeFrame>'''
         if bad_calendar and p=='AKT':
             body=body.replace('</DaysOfWeek>','</DaysOfWeek><HolidayTypes>PublicHoliday</HolidayTypes>')
+        if full_month:
+            body=body.replace('2026-01-15T00:00:00','2026-01-01T00:00:00').replace('2026-01-21T00:00:00','2026-01-31T00:00:00')
         (xml/f'_{p}_shared_data.xml').write_text(publication(body))
     (xml/'_stops.xml').write_text(publication('<SiteFrame id="NSR:SiteFrame:1" version="1"><stopPlaces><StopPlace id="NSR:StopPlace:1" version="1"><Name>Test station</Name><quays><Quay id="NSR:Quay:1" version="1"><Name>First</Name></Quay><Quay id="NSR:Quay:2" version="1"/></quays></StopPlace></stopPlaces></SiteFrame>'))
     lineage=[]
@@ -86,6 +90,8 @@ class SnapshotPipelineTests(unittest.TestCase):
         self.assertEqual(dates.count(),20)
         self.assertEqual(dates.where("service_date='2026-01-16'").count(),0)
         gold_manifest=json.loads((gold/'metadata/manifest.json').read_text())
+        self.assertEqual((gold_manifest['service_from'],gold_manifest['service_to']),('2026-01-01','2026-01-31'))
+        self.assertEqual(self.spark.read.parquet(str(gold/'daily_network_service')).count(),62)
         reconciliation=gold_manifest['reconciliation']
         self.assertEqual(reconciliation['gold_scheduled_departures'],15)
         self.assertEqual(reconciliation['excluded_service_occurrences'],5)
@@ -144,6 +150,21 @@ class SnapshotPipelineTests(unittest.TestCase):
         repeat=run_snapshot(self.spark,manifest,None,self.root/'data')
         self.assertTrue(all(stage['reused'] for stage in repeat.values()))
         self.assertEqual(result['gold']['path'],repeat['gold']['path'])
+
+    def test_full_month_retains_service_before_the_fifteenth_and_after_the_twenty_first(self):
+        from pipeline.run_snapshot import run_snapshot
+        manifest=complete_fixture(self.root/'bronze',full_month=True)
+        outputs=run_snapshot(self.spark,manifest,None,self.root/'data')
+        gold=Path(outputs['gold']['path'])
+        network=self.spark.read.parquet(str(gold/'daily_network_service'))
+        self.assertEqual(network.count(),62)
+        self.assertEqual(network.where("service_date='2026-01-01'").agg({'scheduled_departures':'sum'}).first()[0],3)
+        self.assertEqual(network.where("service_date='2026-01-30'").agg({'scheduled_departures':'sum'}).first()[0],3)
+        self.assertEqual(network.where("service_date='2026-01-31'").agg({'scheduled_departures':'sum'}).first()[0],0)
+        self.assertEqual(network.where('NOT is_source_covered').count(),0)
+        saved=json.loads((gold/'metadata/manifest.json').read_text())
+        self.assertEqual(saved['reconciliation']['gold_scheduled_departures'],66)
+        self.assertEqual(saved['reconciliation']['excluded_service_occurrences'],22)
     def test_invalid_times_are_quarantined_and_the_quality_gate_stops_gold(self):
         from pipeline.run_snapshot import run_snapshot
         manifest=complete_fixture(self.root/'bronze',bad_time=True)

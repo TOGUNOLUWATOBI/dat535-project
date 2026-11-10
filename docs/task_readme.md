@@ -205,8 +205,11 @@ Done when: Gold datasets support comparisons across selected dates and are recon
 First implementation: daily planned departures per line, bounded service-window
 summaries, planned stop coverage and reconciliation with eligible Silver
 service occurrences. Route-change/SCD tables and before/after comparisons are
-still open. Default windows are seven days from each snapshot, not complete
-monthly observations.
+also implemented in the history layer. Default processing now expands full calendar
+months. Validated calendar-support exports fill early dates absent from the
+15th-of-month files; the rebuilt dataset must pass a provider/date coverage
+audit. These are reconstructed monthly plans, not daily observations or actual
+operations. See [full-month processing](full_month_processing.md).
 
 ## Phase 3 — Automation, GUI and deployment
 

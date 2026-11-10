@@ -13,6 +13,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import analytics, data  # noqa: E402
+from pipeline.processing.windows import window_signature  # noqa: E402
 
 DATA_ROOT = os.environ.get("DAT535_DATA_ROOT", "/srv/dat535/data")
 PROVIDERS = {"AKT": "AKT (Agder)", "KOL": "Kolumbus (Rogaland)"}
@@ -127,7 +128,7 @@ def download(frame, filename, label="Download CSV"):
 
 def history_required(history):
     if history is None:
-        st.info("Route history is not available yet. Overview and Compare exports use the published departures directly.")
+        st.info("Route history is not available yet. Overview and Compare months use the published departures directly.")
         return False
     return True
 
@@ -137,66 +138,66 @@ def history_required(history):
 
 def page_overview(items, daily):
     st.header("Network overview")
-    intro("Published plans for Kolumbus and AKT. Each export describes a seven-day service window.")
+    intro("Daily and monthly planned service, reconstructed from validated primary and calendar-support exports.")
     providers, mode = filters("overview")
-    dates = sorted(item["snapshot_date"] for item in items)
-    selected = st.select_slider("Export to inspect", dates, value=dates[-1], format_func=day)
-    item = next(i for i in items if i["snapshot_date"] == selected)
-    series = analytics.network_series(daily, items, providers, mode)
-    current = series[series.snapshot_date == selected]
-    position = dates.index(selected)
-    earlier = dates[position - 1] if position else None
-    previous = series[series.snapshot_date == earlier] if earlier else pd.DataFrame()
-    total = int(current.departures.sum())
-    days = (pd.Timestamp(item["service_to"]) - pd.Timestamp(item["service_from"])).days + 1
-    cols = st.columns(3)
-    metric(cols[0], "Planned departures", f"{total:,}",
-           total - int(previous.departures.sum()) if earlier else None,
-           help=f"Change versus {day(earlier)}" if earlier else "First available export")
-    metric(cols[1], "Lines with service", f"{int(current.active_lines.sum()):,}")
-    metric(cols[2], "Departures per calendar day", f"{total / days:,.1f}")
-    st.caption(f"Window: {day(item['service_from'])} – {day(item['service_to'])} · {days} calendar days"
-               + (f" · Change compared with {day(earlier)}" if earlier else ""))
-
-    st.subheader("Planned service over time")
+    series = analytics.monthly_series(daily, items, providers, mode)
+    months = sorted(series.month.unique())
+    selected = st.selectbox("Month to inspect", months, index=len(months) - 1,
+                            format_func=lambda m: pd.Period(m, freq="M").strftime("%B %Y"), key="overview_month")
+    current = series[series.month == selected]
+    profile = analytics.daily_month(daily, items, selected, providers, mode)
+    covered = profile[profile.covered]
+    days = len(covered)
+    total = int(covered.departures.sum()) if days else None
+    cols = st.columns(4)
+    metric(cols[0], "Planned departures", f"{total:,}" if total is not None else "–")
+    metric(cols[1], "Lines with service", f"{int(current.active_lines.sum()):,}" if days else "–")
+    metric(cols[2], "Departures per calendar day", f"{total / days:,.1f}" if days else "–")
+    metric(cols[3], "Dates covered", f"{days} / {len(profile)}")
+    if days < len(profile):
+        st.info("This month has incomplete published coverage. Counts and averages describe covered dates only.")
+    st.caption("Full-month totals use every calendar day, including covered dates with no service. "
+               "Months have different lengths; use the daily mean and Compare exports weekday profiles when comparing them.")
+    st.subheader("Planned service by month")
     chart_data = series.assign(company=series.provider.map(PROVIDERS))
     st.altair_chart(alt.Chart(chart_data).mark_line(point=True, strokeWidth=2.5).encode(
-        x=alt.X("snapshot_date:T", title="Export date", axis=alt.Axis(format="%d %b %Y", labelAngle=-25)),
-        y=alt.Y("departures:Q", title="Departures in service window", axis=alt.Axis(format=",")),
+        x=alt.X("month_start:T", title="Service month", axis=alt.Axis(format="%b %Y")),
+        y=alt.Y("departures:Q", title="Departures on covered dates", axis=alt.Axis(format=",")),
         color=alt.Color("company:N", title=None, scale=COLORS, legend=alt.Legend(orient="bottom")),
-        tooltip=[alt.Tooltip("snapshot_date:T", title="Export", format="%d %b %Y"), "company:N", "window:N",
-                 alt.Tooltip("departures:Q", title="Departures", format=","),
-                 alt.Tooltip("active_lines:Q", title="Lines with service")]).properties(height=310), use_container_width=True)
-    st.caption("Points are observed exports; gaps contain no observations. Holidays and seasonal schedules can affect comparisons.")
+        tooltip=["month:N", "company:N", alt.Tooltip("departures:Q", title="Departures", format=","),
+                 "covered_days:Q", "calendar_days:Q", "mean_per_day:Q", "active_lines:Q"])
+        .properties(height=310), use_container_width=True)
+    st.caption("This combines dated published plans, not actual operations or a claim of one observation on every day. "
+               "Daily service shows which export supplied each date.")
     with st.expander("Inspect and download the numbers"):
-        table(chart_data.rename(columns={"snapshot_date": "Export", "company": "Operator",
-                                         "departures": "Departures", "active_lines": "Lines with service"})
-              [["Export", "Operator", "window", "Departures", "Lines with service"]])
-        download(series, "network_service.csv")
+        table(series)
+        download(series, "monthly_service.csv")
 
 
 def page_compare(items, daily, history):
-    st.header("Compare exports")
-    intro("Choose any two exports to compare planned service. A line gaining or losing trips in a window does not prove it opened or closed.")
+    st.header("Compare months")
+    intro("Compare reconstructed monthly plans, including valid calendar-support sources for early dates.")
     providers, mode = filters("compare")
-    dates = sorted(i["snapshot_date"] for i in items)
-    if len(dates) < 2:
-        st.info("A comparison needs at least two published exports.")
+    months = sorted({i["service_from"][:7] for i in items})
+    if len(months) < 2:
+        st.info("A comparison needs at least two published months.")
         return
     left, right = st.columns(2)
-    before = left.selectbox("Earlier export", dates[:-1], format_func=day, key="compare_before")
-    later = [d for d in dates if d > before]
-    after = right.selectbox("Later export", later, index=len(later) - 1, format_func=day, key="compare_after")
-    windows = {i["snapshot_date"]: i for i in items}
-    for label, snapshot in (("Earlier", before), ("Later", after)):
-        item = windows[snapshot]
-        st.caption(f"{label} window: {day(item['service_from'])} – {day(item['service_to'])}")
-    lengths = [(pd.Timestamp(windows[d]["service_to"]) - pd.Timestamp(windows[d]["service_from"])).days for d in (before, after)]
-    if lengths[0] != lengths[1]:
-        st.warning("These service windows have different lengths. Choose comparable outputs before comparing totals.")
+    describe = lambda m: pd.Period(m, freq="M").strftime("%B %Y")
+    before = left.selectbox("Earlier month", months[:-1], format_func=describe, key="compare_before")
+    later = [m for m in months if m > before]
+    after = right.selectbox("Later month", later, index=len(later) - 1, format_func=describe, key="compare_after")
+    profiles = {m: analytics.daily_month(daily, items, m, providers, mode) for m in (before, after)}
+    counts = {m: int(frame.covered.sum()) for m, frame in profiles.items()}
+    for month, frame in profiles.items():
+        st.caption(f"{describe(month)}: {counts[month]} / {len(frame)} dates covered")
+    if not all(counts.values()):
+        st.info("Both months need published date coverage before they can be compared.")
         return
+    if any(counts[m] < len(profiles[m]) for m in profiles):
+        st.warning("Coverage is incomplete. These totals and averages describe covered dates only.")
     line_snapshots = history[1]["line_snapshots"] if history else None
-    result = analytics.compare_exports(daily, before, after, providers, mode, line_snapshots)
+    result = analytics.compare_months(daily, items, before, after, providers, mode, line_snapshots)
     first, last = int(result.before.sum()), int(result.after.sum())
     pct = analytics.percentage_change(first, last)
     cols = st.columns(4)
@@ -205,15 +206,18 @@ def page_compare(items, daily, history):
     metric(cols[2], "Change", f"{pct:+.1f}%" if pct is not None else "Not defined",
            help="Percentage change is undefined when the earlier total is zero.")
     metric(cols[3], "Lines with changed counts", f"{int((result.change != 0).sum()):,}")
-    weekdays = analytics.weekday_comparison(daily, items, before, after, providers, mode)
-    weekdays["export"] = weekdays.snapshot_date.map(day)
+    st.caption(f"Mean departures per covered calendar day: {first / counts[before]:,.1f} → {last / counts[after]:,.1f}. "
+               "Months have different lengths and weekday mixes.")
+    weekdays = pd.concat([frame[frame.covered].groupby("weekday").departures.mean().reindex(analytics.WEEKDAYS)
+                          .rename("departures").reset_index().assign(month=describe(m))
+                          for m, frame in profiles.items()], ignore_index=True)
     st.subheader("Weekday service profile")
     st.altair_chart(alt.Chart(weekdays).mark_bar().encode(
-        x=alt.X("weekday:N", sort=analytics.WEEKDAYS, title=None), xOffset="export:N",
-        y=alt.Y("departures:Q", title="Mean departures per calendar day"),
-        color=alt.Color("export:N", title="Export", scale=alt.Scale(range=["#94a3b8", "#14b8a6"])),
-        tooltip=["weekday:N", "export:N", alt.Tooltip("departures:Q", format=",.1f")]).properties(height=240), use_container_width=True)
-    st.caption("Compare the same weekdays across the two windows. Days without service count as zero.")
+        x=alt.X("weekday:N", sort=analytics.WEEKDAYS, title=None), xOffset="month:N",
+        y=alt.Y("departures:Q", title="Mean departures per covered calendar day"),
+        color=alt.Color("month:N", title="Month", scale=alt.Scale(range=["#94a3b8", "#14b8a6"])),
+        tooltip=["weekday:N", "month:N", alt.Tooltip("departures:Q", format=",.1f")]).properties(height=240), use_container_width=True)
+    st.caption("Covered dates with no service count as zero. Uncovered dates are excluded from the mean.")
     st.subheader("Line-by-line changes")
     view = st.radio("Show lines", ["All", "Largest changes", "New service in window", "No service in later window"],
                     horizontal=True, key="compare_lines")
@@ -223,12 +227,14 @@ def page_compare(items, daily, history):
     elif view != "All":
         shown = result[result.service_status == view]
     if shown.empty:
-        st.info("No lines match this view for the selected operator, mode and exports.")
+        st.info("No lines match this view for the selected operator, mode and months.")
     else:
         table(shown[["provider", "number", "route", "before", "after", "change", "change_pct", "service_status"]]
               .rename(columns={"before": "Earlier", "after": "Later", "change": "Difference", "change_pct": "Change (%)"}))
-    download(result, f"comparison_{before}_{after}_{mode}.csv", "Download full comparison")
-    st.caption("Lines are matched by operator and NeTEx ID. Verified renumberings and replacements are shown separately under Replaced lines.")
+    download(result.rename(columns={"earlier_export": "earlier_month_start", "later_export": "later_month_start"}),
+             f"comparison_{before}_{after}_{mode}.csv", "Download full comparison")
+    st.caption("Lines are matched by operator and NeTEx ID. Gaining or losing service in a month does not prove opening or closure. "
+               "Daily service shows source dates; verified replacements are under Replaced lines.")
 
 
 def page_daily(items, daily):
@@ -248,8 +254,9 @@ def page_daily(items, daily):
     if count < len(profile):
         st.info(f"{len(profile) - count} dates have no published coverage. Blank dates are unknown, not zero service. "
                 "Full-month totals are unavailable until the remaining dates are covered.")
-    st.caption("When export windows overlap, each date uses the latest covering export observed on or before that date. "
-               "Whole exports are selected together; missing lines are not filled from older plans.")
+    st.caption("Each date uses the latest export whose calendar validity covers it, including dates before the export was downloaded. "
+               "This reconstructs published plans for the month, not what was known on each day. "
+               "The source export is shown for every date; missing lines are not filled from older plans.")
     st.subheader("Departures each day")
     chart_data = profile.assign(date_label=profile.service_date.map(day),
                                 operating_date=profile.service_date.dt.strftime("%Y-%m-%d"))
@@ -306,24 +313,32 @@ def page_line(items, daily, history):
     mine = snaps[(snaps.line_id == line_id) & (snaps.provider == provider)].sort_values("snapshot_date")
     chosen = st.selectbox("Export to inspect", sorted(mine.snapshot_date.unique(), reverse=True), format_func=day)
     observed = mine[mine.snapshot_date == chosen].iloc[0]
+    day_rows = daily[(daily.line_entity_id == line_id) & (daily.provider == provider)]
+    month = chosen[:7]
+    monthly_rows, coverage = analytics.monthly_plan_rows(day_rows, items, month, [provider])
     cols = st.columns(3)
-    metric(cols[0], "Planned departures", f"{int(observed.window_departures):,}")
-    metric(cols[1], "Stops served in window", f"{int(observed.window_stop_count):,}")
+    metric(cols[0], "Planned departures in month", f"{int(monthly_rows.scheduled_departures.sum()):,}")
+    metric(cols[1], "Stops served by selected export", f"{int(observed.window_stop_count):,}")
     metric(cols[2], "Stops in route definitions", f"{int(observed.stop_count):,}")
+    st.caption("Monthly departures include calendar-support plans. Stop and version details describe the selected primary export.")
     service, versions, changes, stops = st.tabs(["Service", "Observed versions", "Changes", "Stops"])
     with service:
-        st.altair_chart(alt.Chart(mine).mark_line(point=True, color="#14b8a6").encode(
-            x=alt.X("snapshot_date:T", title="Export date", axis=alt.Axis(format="%d %b %Y")),
-            y=alt.Y("window_departures:Q", title="Departures in service window"),
-            tooltip=[alt.Tooltip("snapshot_date:T", format="%d %b %Y"), "window_departures:Q", "window_stop_count:Q"])
+        trend = analytics.monthly_series(day_rows, items, [provider])
+        st.altair_chart(alt.Chart(trend).mark_line(point=True, color="#14b8a6").encode(
+            x=alt.X("month_start:T", title="Service month", axis=alt.Axis(format="%b %Y")),
+            y=alt.Y("departures:Q", title="Departures on covered dates"),
+            tooltip=["month:N", "departures:Q", "covered_days:Q", "calendar_days:Q"])
             .properties(height=250), use_container_width=True)
-        day_rows = daily[(daily.line_entity_id == line_id) & (daily.provider == provider)]
-        windows = {i["snapshot_date"]: i for i in items}
-        if chosen in windows:
-            per_day = analytics.daily_profile(day_rows, windows[chosen])
+        if not coverage.empty:
+            period = pd.Period(month, freq="M")
+            window = {"snapshot_date": month + "-01", "service_from": str(period.start_time.date()),
+                      "service_to": str(period.end_time.date())}
+            per_day = analytics.daily_profile(monthly_rows, window)
+            per_day["departures"] = per_day.departures.where(coverage.covered).astype("Int64")
+            per_day["source_export"] = coverage.source_export
             per_day["first departure"] = per_day["first"].map(data.clock)
             per_day["last departure"] = per_day["last"].map(data.clock)
-            st.subheader("Each day in the selected window")
+            st.subheader("Each day in the selected month")
             st.altair_chart(alt.Chart(per_day).mark_bar(color="#14b8a6", cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
                 x=alt.X("service_date:T", title=None, axis=alt.Axis(format="%a %d %b")),
                 y=alt.Y("departures:Q", title="Departures"), tooltip=["weekday:N", "departures:Q", "first departure:N", "last departure:N"])
@@ -367,7 +382,9 @@ def page_line(items, daily, history):
 def page_changes(history):
     st.header("What changed")
     intro("Compare two exports: which lines appeared or are no longer published, "
-          "and which have more or fewer planned trips in their weekly windows.")
+          "and which have more or fewer planned trips in their declared service windows.")
+    st.caption("These service counts belong to the primary exports and their available validity. "
+               "Use Compare months for complete monthly totals that include calendar-support plans.")
     _, tables, _ = history
     names = line_labels(tables["catalog"])
     renumberings, discontinuations = data.evidence()
@@ -385,10 +402,10 @@ def page_changes(history):
     cols = st.columns(4)
     cols[0].metric("Lines", int(row.lines_after), int(row.lines_after - row.lines_before))
     cols[1].metric("Lines appeared / disappeared", f"+{row.lines_appeared} / −{row.lines_disappeared}")
-    cols[2].metric("Trips per week", f"{row.window_departures_after:,}",
+    cols[2].metric("Trips in service window", f"{row.window_departures_after:,}",
                    int(row.window_departures_after - row.window_departures_before))
     cols[3].metric("Stops gained / lost", f"+{row.stops_gained_window_service} / −{row.stops_lost_window_service}",
-                   help="Stops with planned trips in only one of the two selected weekly windows.")
+                   help="Stops with planned trips in only one of the two selected service windows.")
 
     t = tables["line_transitions"]
     t = t[(t.from_snapshot == start) & (t.provider == provider)]
@@ -405,7 +422,7 @@ def page_changes(history):
         notices = notices[notices.to_snapshot == end].groupby("line_id").source_url.first()
         table(pd.DataFrame({
             "Number": gone.public_code_before, "Route": gone.name_before,
-            "Trips per week before": gone.departures_before.astype("Int64"),
+            "Trips in earlier window": gone.departures_before.astype("Int64"),
             "What happened": gone.interpretation.map(WHAT_HAPPENED),
             "Replaced by": gone.line_id.map(replaced).fillna(""), "Notice": gone.line_id.map(notices)}),
             column_config={"Notice": st.column_config.LinkColumn("Notice", display_text="read")})
@@ -416,7 +433,7 @@ def page_changes(history):
         st.caption("A line can be published before its planned service starts, so it can show 0 trips in this window.")
         table(pd.DataFrame({
             "Number": new.public_code_after, "Route": new.name_after,
-            "Trips per week": new.departures_after.astype("Int64"),
+            "Trips in later window": new.departures_after.astype("Int64"),
             "What it is": new.interpretation.map(WHAT_HAPPENED)}))
 
     both = t[(t.departures_before > 0) & (t.departures_after > 0)].copy()
@@ -428,7 +445,7 @@ def page_changes(history):
         top = pd.concat([both.nsmallest(8, "change"), both.nlargest(8, "change")]).drop_duplicates("line_id")
         top = top[top.change != 0].sort_values("change")
         st.altair_chart(alt.Chart(top).mark_bar().encode(
-            x=alt.X("change:Q", title="Change in trips per week"), y=alt.Y("line:N", sort=None, title=None),
+            x=alt.X("change:Q", title="Change in trips per service window"), y=alt.Y("line:N", sort=None, title=None),
             color=alt.condition("datum.change < 0", alt.value("#c0392b"), alt.value("#2e86c1")),
             tooltip=[alt.Tooltip("line:N", title="Line"), alt.Tooltip("departures_before:Q", title="Before"),
                      alt.Tooltip("departures_after:Q", title="After")]), use_container_width=True)
@@ -445,6 +462,8 @@ def page_replaced(history):
     st.header("Replaced lines")
     intro("Lines the operator replaced with a new line or number. "
           "Pick one to compare the old and new line.")
+    st.caption("Departure figures describe each primary export's available service window. "
+               "Monthly reconstruction is shown in Compare months and One line.")
     _, tables, stop_names = history
     names = line_labels(tables["catalog"])
     renumberings, discontinuations = data.evidence()
@@ -467,7 +486,7 @@ def page_replaced(history):
                                      pick.new_line_id: f"New: {short(pick.new_line_id)}"})
     st.altair_chart(alt.Chart(pair.sort_values("snapshot_date")).mark_line(point=True).encode(
         x=alt.X("snapshot_date:T", title="Export date", axis=alt.Axis(format="%d %b %Y")),
-        y=alt.Y("window_departures:Q", title="Planned trips per week"),
+        y=alt.Y("window_departures:Q", title="Planned trips in service window"),
         color=alt.Color("line:N", title=None, legend=alt.Legend(orient="bottom", labelLimit=400)),
         tooltip=[alt.Tooltip("snapshot_date:T", title="Export", format="%d %b %Y"), "line:N",
                  alt.Tooltip("window_departures:Q", title="Trips")]).properties(height=280),
@@ -479,8 +498,8 @@ def page_replaced(history):
         old, new = before.sort_values("snapshot_date").iloc[-1], after.sort_values("snapshot_date").iloc[0]
         old_stops, new_stops = set(old.stop_ids), set(new.stop_ids)
         c1, c2 = st.columns(2)
-        c1.metric(f"Old: {old.public_code} {old['name']}", f"{old.window_departures} trips/week")
-        c2.metric(f"New: {new.public_code} {new['name']}", f"{new.window_departures} trips/week",
+        c1.metric(f"Old: {old.public_code} {old['name']}", f"{old.window_departures} trips/window")
+        c2.metric(f"New: {new.public_code} {new['name']}", f"{new.window_departures} trips/window",
                   int(new.window_departures - old.window_departures))
         st.markdown(f"**Stops on both lines:** {len(old_stops & new_stops)}")
         st.markdown(f"**Stops only in the old route definition ({len(old_stops - new_stops)}):** "
@@ -499,7 +518,8 @@ def page_replaced(history):
 
 def page_checks(items, history):
     st.header("Data checks")
-    intro("New results are checked before publication. Older results may predate the quality gate.")
+    intro("The gate checks each export before publication. Daily service separately reports calendar-date coverage. "
+          "Older results may predate the quality gate.")
     gates = [(i["gold_manifest"].get("quality_gate") or {}).get("status", "not recorded") for i in items]
     cols = st.columns(3)
     metric(cols[0], "Published exports", len(items))
@@ -510,7 +530,9 @@ def page_checks(items, history):
         m = item["gold_manifest"]
         recon = m.get("reconciliation", {})
         gate = m.get("quality_gate") or {}
-        rows.append({"Timetable date": day(item["snapshot_date"]),
+        rows.append({"Source export": day(item["snapshot_date"]),
+                     "Service window": f"{day(item['service_from'])} – {day(item['service_to'])}",
+                     "Role": "Calendar support" if m.get("history_role") == "calendar_support" else "Primary observation",
                      "Result": GATE.get(gate.get("status"), "Not checked (older run)"),
                      "Fixed departures counted": recon.get("gold_scheduled_departures"),
                      "Outside fixed-service metrics": recon.get("excluded_service_occurrences"),
@@ -567,7 +589,7 @@ def page_checks(items, history):
 
 # --------------------------------------------------------------------------
 
-PAGES = {"Overview": page_overview, "Daily service": page_daily, "Compare exports": page_compare, "One line": page_line, "What changed": page_changes,
+PAGES = {"Overview": page_overview, "Daily service": page_daily, "Compare months": page_compare, "One line": page_line, "What changed": page_changes,
          "Replaced lines": page_replaced, "Data checks": page_checks}
 
 
@@ -578,8 +600,8 @@ def main():
     with st.sidebar.expander("How to read this"):
         st.markdown(
             "- **Timetable**: an export of published plans. Historical exports are sampled on the 15th, "
-            "January–September 2026; later exports come from scheduled ingestion.\n"
-            "- **Trips**: planned departures in the seven-day window starting on the export date. These are plans, "
+            "January–September 2026; additional calendar-support exports fill early dates. Later exports come from scheduled ingestion.\n"
+            "- **Trips**: planned departures in the full calendar month. These are plans, "
             "not buses that actually ran.\n"
             "- **Confirmed**: the operator announced the change on its website.\n"
             "- A difference between exports shows a change in the published plans. "
@@ -597,6 +619,7 @@ def main():
     if not items:
         st.info("No published exports are available yet.")
         st.stop()
+    primary = [i for i in items if i["gold_manifest"].get("history_role") != "calendar_support"]
     st.sidebar.divider()
     st.sidebar.caption(f"{len(items)} published exports\n\n{day(items[0]['snapshot_date'])} – {day(items[-1]['snapshot_date'])}")
     history = None
@@ -606,6 +629,15 @@ def main():
         st.sidebar.caption("Route history unavailable")
         with st.sidebar.expander("History status"):
             st.write(str(error))
+    if history:
+        current = {i["snapshot_date"]: i for i in primary}
+        if any(i["snapshot_date"] in current and
+               (window_signature(i) != window_signature(current[i["snapshot_date"]]) or
+                (i.get("gold_manifest_sha256") and current[i["snapshot_date"]].get("gold_manifest_sha256") and
+                 i["gold_manifest_sha256"] != current[i["snapshot_date"]]["gold_manifest_sha256"]))
+               for i in history[0].get("snapshots", [])):
+            st.warning("Route history uses older Gold outputs or service windows. Rebuild history before comparing its results with the current monthly outputs.")
+            history = None
     if history:
         last_history = history[1]["line_snapshots"].snapshot_date.max()
         st.sidebar.caption(f"Route history through {day(last_history)}")
@@ -617,7 +649,7 @@ def main():
         page_overview(items, daily)
     elif page == "Daily service":
         page_daily(items, daily)
-    elif page == "Compare exports":
+    elif page == "Compare months":
         page_compare(items, daily, history)
     elif page == "One line":
         if history_required(history):

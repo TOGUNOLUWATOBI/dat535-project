@@ -59,6 +59,7 @@ from uuid import uuid4
 from pipeline.checkpoints import digest, identity, output_inventory
 from pipeline.ingestion.generate_provider_dataset import save_json
 from pipeline.processing.bronze.xml_to_parquet import utc_now
+from pipeline.processing.windows import window_signature
 
 SCHEMA_VERSION = 2
 TRACKED = ["public_codes", "names", "transport_modes", "line_kinds", "stop_set_hash", "pattern_set_hash"]
@@ -107,6 +108,8 @@ def find_inputs(state_path, dates=None, verify=True):
             if verify and output_inventory(gold) != json.loads(row["inventory_json"]):
                 raise HistoryInputError("Gold files differ from their checkpoint hashes")
             gold_manifest = json.loads((gold / "metadata/manifest.json").read_text())
+            if gold_manifest.get("history_role") == "calendar_support":
+                continue
             silver = Path(gold_manifest["source_manifest"]).parent.parent
             silver_row = silver_rows.get(str(silver))
             if silver_row is None:
@@ -133,11 +136,8 @@ def find_inputs(state_path, dates=None, verify=True):
     providers = {tuple(i["providers"]) for i in inputs}
     if len(providers) != 1:
         raise HistoryInputError(f"Snapshots use different provider selections: {sorted(providers)}")
-    windows = {(date.fromisoformat(i["service_to"]) - date.fromisoformat(i["service_from"])).days + 1
-               for i in inputs}
-    offsets = {(date.fromisoformat(i["service_from"]) - date.fromisoformat(i["snapshot_date"])).days
-               for i in inputs}
-    if len(windows) != 1 or len(offsets) != 1:
+    windows = {window_signature(i) for i in inputs}
+    if len(windows) != 1:
         raise HistoryInputError("Snapshots use different Gold service windows; departures would not be comparable")
     return inputs
 

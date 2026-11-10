@@ -7,6 +7,7 @@ directly, so the GUI needs no Spark session.
 """
 
 import json
+import hashlib
 from pathlib import Path
 import sqlite3
 from datetime import date
@@ -14,6 +15,7 @@ from datetime import date
 import pandas as pd
 
 from pipeline.analysis.inspect_history import latest_history
+from pipeline.processing.windows import window_signature
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -41,7 +43,8 @@ def snapshots(data_root):
         gold = Path(row["output_path"])
         if not gold.is_absolute():
             gold = root / gold
-        manifest = json.loads((gold / "metadata/manifest.json").read_text())
+        raw = (gold / "metadata/manifest.json").read_bytes()
+        manifest = json.loads(raw)
         if manifest.get("status") != "complete" or manifest.get("snapshot_date") != day:
             raise ValueError(f"Registered Gold output has inconsistent publication metadata: {gold}")
         if "daily_line_service" not in manifest.get("tables", {}):
@@ -53,11 +56,11 @@ def snapshots(data_root):
         if date.fromisoformat(manifest["service_to"]) < date.fromisoformat(manifest["service_from"]):
             raise ValueError(f"Published Gold output has a reversed service window: {gold}")
         chosen[day] = {"snapshot_date": day, "gold": str(gold), "gold_manifest": manifest,
+                       "gold_manifest_sha256": hashlib.sha256(raw).hexdigest(),
                        "service_from": manifest["service_from"], "service_to": manifest["service_to"]}
     items = [chosen[day] for day in sorted(chosen)]
     selections = {tuple(sorted(item["gold_manifest"]["providers"])) for item in items}
-    windows = {((date.fromisoformat(i["service_to"]) - date.fromisoformat(i["service_from"])).days,
-                (date.fromisoformat(i["service_from"]) - date.fromisoformat(i["snapshot_date"])).days) for i in items}
+    windows = {window_signature(i) for i in items}
     if len(selections) > 1 or len(windows) > 1:
         raise ValueError("Published exports use different provider selections or service-window definitions")
     return items

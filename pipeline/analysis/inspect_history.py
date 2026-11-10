@@ -10,7 +10,7 @@ Reads the newest complete route-history output under DATA_ROOT. Examples:
 
 ``line`` and ``date`` accept a bus number (public code) or a full NeTEx line ID.
 Departure numbers are planned departures in each snapshot's Gold window
-(seven days from the snapshot date by default), not whole months.
+(a full calendar month by default). Observation and service dates remain separate.
 """
 
 import argparse
@@ -82,7 +82,7 @@ def show_summary(h, report):
     print(f"Route history: {h.path}")
     print("Snapshots:", ", ".join(s["snapshot_date"] for s in report["snapshots"]))
     print("Checks:", json.dumps({k: v for k, v in report["checks"].items() if k != "snapshots"}))
-    print("\nNetwork per published export (departures = planned departures in the 7-day Gold window;")
+    print("\nNetwork per published export (departures = planned departures in the declared Gold window;")
     print("stops = provider stops in published patterns / served by journeys operating in the window)")
     print(f"{'snapshot':11} {'prov':4} {'mode':6} {'lines':>5} {'w/ service':>10} {'departures':>10} {'stops':>13}")
     for r in h.table("network_snapshots").orderBy("snapshot_date", "provider", "transport_mode").collect():

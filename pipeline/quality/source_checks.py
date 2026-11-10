@@ -36,6 +36,18 @@ def entities(path):
                 element.clear()
 
 
+def frame_validity(path):
+    """Read the source CompositeFrame's first availability condition directly."""
+    with Path(path).open("rb") as stream:
+        for _, element in ET.iterparse(stream, events=("end",)):
+            if element.tag == NS + "AvailabilityCondition":
+                return tuple((element.findtext(NS + name) or "")[:10] or None
+                             for name in ("FromDate", "ToDate"))
+            if element.tag == NS + "FrameDefaults":
+                break
+    return None, None
+
+
 def resolve(rows, target, description, collapse=False):
     identifier, version = target
     matches = [r for r in rows if r["id"] == identifier
@@ -54,7 +66,9 @@ class SourceIndex:
         self.local = defaultdict(lambda: defaultdict(list))
         self.shared = defaultdict(list)
         self.journeys = []
+        self.validity = {}
         for path in dict.fromkeys(str(Path(p).resolve()) for p in paths):
+            self.validity[path] = frame_validity(path)
             for tag, element in entities(path):
                 row = {"id": element.get("id"), "version": element.get("version")}
                 if tag in ("Line", "FlexibleLine"):
@@ -93,6 +107,10 @@ class SourceIndex:
             route = resolve(local["routes"], pattern["route"], "Route")
             target = route["line"]
         return resolve(local["lines"], target, "Line")
+
+    def bounded_dates(self, path, dates):
+        first, last = self.validity[str(Path(path).resolve())]
+        return [d for d in dates if (first is None or d >= first) and (last is None or d <= last)]
 
     def physical_stops(self, path, pattern_ref, passing_times, stop_files):
         local = self.local[str(Path(path).resolve())]
@@ -146,6 +164,7 @@ class SourceIndex:
             if not journey["day_types"]:
                 raise SourceReferenceError(f"Journey {journey['id']} has no day types")
             dates, _ = operating_dates(journey["day_types"], calendar, first, last)
+            dates = self.bounded_dates(journey["file"], dates)
             target = flexible if line["flexible"] or journey["kind"] == "FlexibleServiceJourney" else fixed
             target.update(dates)
         if not occurrences:

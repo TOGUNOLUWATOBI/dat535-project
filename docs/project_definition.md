@@ -16,7 +16,7 @@ Questions the outputs answer:
    between two exports, and which of these changes are confirmed by an operator
    source?
 2. How many planned departures, and which stops, does each network serve in a
-   comparable seven-day window, and how does that change over the year
+   full calendar month, with daily means and weekday profiles, and how does that change over the year
    (holidays, summer timetables, network redesigns)?
 3. For a given line and date, which version of the line applies and how many
    departures are planned?
@@ -36,7 +36,7 @@ studies. A Streamlit GUI is optional and comes after these.
 | Historical sample | Nine exports dated the 15th of each month, January – September 2026 |
 | Ongoing sample | Scheduled ingestion on the server; first processed scheduled snapshot 8 November 2026 |
 | Excluded | Misdated 2025 payloads that were byte-identical to later files (see README) |
-| Modes | **Decision.** Proposed: multimodal (bus and water), with bus-only figures reported separately. About 8.5% of departures are boats (44,534 of 521,185) |
+| Modes | **Decision.** Proposed: multimodal (bus and water), with bus-only figures reported separately. In the historical seven-day baseline, about 8.5% of departures were boats (44,534 of 521,185); this is not the rebuilt monthly total |
 | Service type | Fixed scheduled services. Flexible (on-demand) services are kept in Silver but excluded from departure totals |
 
 Do not write "bus departures" for an all-mode total. Use "planned departures",
@@ -47,7 +47,7 @@ or filter `transport_mode = 'bus'`.
 | Term | Meaning |
 | --- | --- |
 | **Snapshot date** | The date of the export we downloaded. It is an *observation* date: what had been published by then |
-| **Service window** | Seven days from the snapshot date (snapshot date + 6). Departures and window-served stops are counted only here |
+| **Service window** | Full calendar month by default. Dates are bounded by source validity; auxiliary validated exports fill early-month gaps. Older seven-day outputs require the full-month rebuild |
 | **Service date** | The operating day of a journey in the window. Times after midnight belong to the previous service date (e.g. 26:45) |
 | **first_observed / last_observed** | First and last snapshot in which a line version was published |
 | **previous_snapshot** | The snapshot before `first_observed`; the change was published after it |
@@ -84,7 +84,7 @@ We do not claim:
 
 * That buses ran as planned (no real-time data).
 * Effective dates of changes, except where an operator source states them.
-* Anything between snapshots, or outside the seven-day window.
+* Actual daily observations between snapshots. Monthly plans are reconstructed from dated exports, with source provenance for each service date.
 * Multi-node scalability. Processing runs on one server (`local[2]`).
 
 ## Why Spark

@@ -43,7 +43,7 @@ class GuiInteractionTests(unittest.TestCase):
         self.assertEqual(self.metrics(app)["Planned departures"], "0")
         self.assertEqual(self.metrics(app)["Lines with service"], "0")
 
-        app.sidebar.radio[0].set_value("Compare exports").run()
+        app.sidebar.radio[0].set_value("Compare months").run()
         app.selectbox(key="compare_operator").set_value("AKT").run()
         app.selectbox(key="compare_mode").set_value("Boat").run()
         values = self.metrics(app)
@@ -57,9 +57,9 @@ class GuiInteractionTests(unittest.TestCase):
         first = self.items[0]
         app = self.run_app([first], self.daily[self.daily.snapshot_date == first["snapshot_date"]])
         self.assertEqual(self.metrics(app)["Planned departures"], "34")
-        app.sidebar.radio[0].set_value("Compare exports").run()
+        app.sidebar.radio[0].set_value("Compare months").run()
         self.assertFalse(app.exception)
-        self.assertTrue(any("at least two published exports" in info.value for info in app.info))
+        self.assertTrue(any("at least two published months" in info.value for info in app.info))
         app.sidebar.radio[0].set_value("One line").run()
         self.assertFalse(app.exception)
         self.assertTrue(any("Route history is not available" in info.value for info in app.info))

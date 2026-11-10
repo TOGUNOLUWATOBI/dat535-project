@@ -18,7 +18,8 @@ ENTITY_TAGS = {
 def load_sources(manifest_path, snapshot_date=None, sample_per_provider=None):
     path = Path(manifest_path).resolve()
     manifest = json.loads(path.read_text())
-    if manifest.get("status") not in ("complete", "complete_with_warnings"):
+    historical = "snapshots" in manifest
+    if manifest.get("status") not in ("complete", "complete_with_warnings") and not historical:
         raise ValueError("Processing requires a complete or complete_with_warnings ingestion")
     if sample_per_provider is not None and sample_per_provider < 1:
         raise ValueError("sample_per_provider must be positive")
