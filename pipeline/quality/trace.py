@@ -15,19 +15,19 @@ treatment in Gold (counted per line and date, or listed as excluded) is checked.
 Pattern/stop references and flexible windows are resolved independently too;
 whole-line XML counts guard against mutually consistent Silver/Gold errors.
 
-    bash scripts/run_quality_trace.sh --data-root /srv/dat535/data --snapshot 2026-02-15 \\
-        --markdown docs/quality_traces.md
+    bash scripts/run.sh quality-trace --data-root /srv/dat535/data --snapshot 2026-02-15 \\
+        --markdown docs/evidence/quality_traces.md
 """
 
 import argparse
 from collections import defaultdict
 from datetime import date, timedelta
 import json
-import os
 from pathlib import Path
 import sys
 
 from pipeline.quality.source_checks import SourceIndex, SourceReferenceError, entities, frame_validity
+from pipeline.spark_runtime import start_spark
 
 NS = "{http://www.netex.org.uk/netex}"
 DAYS = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
@@ -211,6 +211,7 @@ def compare_passing_times(source, silver, physical):
 # Silver/Gold side.
 
 def pick_examples(spark, silver, staging, first, last):
+    """One Silver journey_key per trace kind (ordinary, overnight, calendar_exception, flexible), if present."""
     from pyspark.sql import functions as F
     read = lambda root, manifest, name: spark.read.parquet(str(root / manifest["tables"][name]["path"]))
     s_manifest = json.loads((silver / "metadata/manifest.json").read_text())
@@ -244,6 +245,7 @@ def pick_examples(spark, silver, staging, first, last):
 
 
 def trace(spark, silver, gold, staging, journey_key, kind, context=None):
+    """Compare one journey's XML, Silver rows and Gold treatment; ZIP-backed XML is restored meanwhile."""
     from pipeline.storage.zip_bronze import snapshot_xml
     source = json.loads((Path(staging) / "metadata/manifest.json").read_text())
     with snapshot_xml(source["source_manifest"], source["snapshot_date"]):
@@ -324,6 +326,7 @@ def _trace(spark, silver, gold, staging, journey_key, kind, context=None):
 
 
 def clock(seconds):
+    """Seconds after the operating day's midnight as ``HH:MM (+n day)``."""
     if seconds is None:
         return "–"
     day, rest = divmod(int(seconds), 86400)
@@ -376,12 +379,7 @@ def main(argv=None):
     item = found[0]
     silver, gold = Path(item["silver"]), Path(item["gold"])
     staging = Path(json.loads((silver / "metadata/manifest.json").read_text())["source_manifest"]).parent.parent
-    from pyspark.sql import SparkSession
-    if args.master.startswith("local"):
-        os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-    spark = (SparkSession.builder.appName("DAT535-quality-trace").master(args.master)
-             .config("spark.sql.shuffle.partitions", "4").config("spark.ui.showConsoleProgress", "false").getOrCreate())
-    spark.sparkContext.setLogLevel("ERROR")
+    spark = start_spark("DAT535-quality-trace", args.master, log_level="ERROR")
     try:
         first, last = date.fromisoformat(item["service_from"]), date.fromisoformat(item["service_to"])
         picked = ({f"journey_{n}": key for n, key in enumerate(args.journey, 1)} if args.journey

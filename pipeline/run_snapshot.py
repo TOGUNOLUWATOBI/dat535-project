@@ -8,24 +8,35 @@ from pathlib import Path
 import shutil
 import sys
 
-from pipeline.checkpoints import Checkpoints, digest, identity
+from pipeline.checkpoints import Checkpoints, identity
+from pipeline.common import sha256_file
 from pipeline.processing.bronze.staging_sources import load_snapshot_sources
 from pipeline.processing.windows import service_window
+from pipeline.spark_runtime import error_text, memory_size, start_spark, stop_spark, worker_environment
 from pipeline.storage.zip_bronze import with_snapshot_xml
-from pipeline.spark_runtime import error_text, memory_size, stop_spark, worker_environment
+
+QUALITY_THRESHOLDS = "config/quality_thresholds.json"
 
 
 def implementation(*paths):
+    """Identity of the code that produces a stage: the hashes of its source files.
+
+    Any byte change to these files (including comments) means a completed
+    checkpoint is no longer reused, and the stage runs again into a new directory.
+    """
     root = Path(__file__).resolve().parent.parent
-    return identity([(p, digest(root / p)) for p in paths])
-
-
-QUALITY_THRESHOLDS = "config/quality_thresholds.json"
+    return identity([(p, sha256_file(root / p)) for p in paths])
 
 
 @with_snapshot_xml
 def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold", service_from=None, service_to=None,
                  thresholds_path=None, history_role="primary"):
+    """Process one snapshot through ``through`` and return each stage's output path and reuse flag.
+
+    Each stage is keyed by its input hash and implementation; an identical,
+    byte-verified earlier output is reused instead of recomputed. The
+    decorator restores ZIP-backed source XML for the duration of the call.
+    """
     from pipeline.processing.bronze.snapshot_to_parquet import convert_snapshot
     from pipeline.processing.silver.build import build_silver
     from pipeline.processing.gold.build import build_gold
@@ -44,9 +55,11 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
         key = state.register(selection)
         with state.lock(key):
             versions = {
-                "staging": implementation("pipeline/processing/bronze/snapshot_to_parquet.py", "pipeline/processing/bronze/netex_schema.py",
-                    "pipeline/processing/bronze/xml_to_parquet.py", "pipeline/processing/bronze/staging_sources.py"),
-                "silver": implementation("pipeline/processing/silver/build.py","pipeline/processing/silver/calendars.py",
+                "staging": implementation("pipeline/processing/bronze/snapshot_to_parquet.py",
+                                          "pipeline/processing/bronze/netex_schema.py",
+                                          "pipeline/processing/bronze/staging_sources.py"),
+                "silver": implementation("pipeline/processing/silver/build.py",
+                                         "pipeline/processing/silver/calendars.py",
                                          "pipeline/processing/windows.py"),
                 # The gate code and its thresholds decide whether Gold publishes, so a change to
                 # either rebuilds Gold (Silver is reused).
@@ -54,71 +67,79 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
                                                  "pipeline/quality/silver_profile.py"), thresholds]),
             }
             outputs = {}
-            def destination(layer): return data_root / layer / "entur" / selection["snapshot_date"] / key[:16]
+
+            def destination(layer):
+                return data_root / layer / "entur" / selection["snapshot_date"] / key[:16]
+
             # Leave headroom for Spark's shuffle and system services. No cleanup is automatic.
-            data_root.mkdir(parents=True,exist_ok=True)
+            data_root.mkdir(parents=True, exist_ok=True)
             if shutil.disk_usage(data_root).free < 800 * 1024**2:
                 raise RuntimeError("Less than 800 MiB free: add storage before starting another snapshot; no raw data was removed")
-            staging, staged_sha, reused = state.execute(key,"staging",key,versions["staging"],destination("staging"),
-                lambda output: convert_snapshot(spark,manifest,output,day,selection))
-            outputs["staging"] = {"path":str(staging),"reused":reused}
-            if through == "staging": return outputs
-            silver_input = identity([staged_sha,str(service_from),str(service_to),history_role])
-            silver, silver_sha, reused = state.execute(key,"silver",silver_input,versions["silver"],destination("silver"),
-                lambda output:build_silver(spark,staging,output,service_from,service_to,history_role))
-            outputs["silver"] = {"path":str(silver),"reused":reused}
-            if through == "silver": return outputs
-            gold, _, reused = state.execute(key,"gold",silver_sha,versions["gold"],destination("gold"),
-                lambda output:build_gold(spark,silver,output,thresholds))
-            outputs["gold"] = {"path":str(gold),"reused":reused}
+            staging, staged_sha, reused = state.execute(
+                key, "staging", key, versions["staging"], destination("staging"),
+                lambda output: convert_snapshot(spark, manifest, output, day, selection))
+            outputs["staging"] = {"path": str(staging), "reused": reused}
+            if through == "staging":
+                return outputs
+            # Silver depends on the staged bytes and on the requested service window.
+            silver_input = identity([staged_sha, str(service_from), str(service_to), history_role])
+            silver, silver_sha, reused = state.execute(
+                key, "silver", silver_input, versions["silver"], destination("silver"),
+                lambda output: build_silver(spark, staging, output, service_from, service_to, history_role))
+            outputs["silver"] = {"path": str(silver), "reused": reused}
+            if through == "silver":
+                return outputs
+            gold, _, reused = state.execute(
+                key, "gold", silver_sha, versions["gold"], destination("gold"),
+                lambda output: build_gold(spark, silver, output, thresholds))
+            outputs["gold"] = {"path": str(gold), "reused": reused}
             return outputs
-    finally: state.close()
+    finally:
+        state.close()
 
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest",type=Path,required=True)
-    group=parser.add_mutually_exclusive_group()
-    group.add_argument("--date",type=date.fromisoformat)
-    group.add_argument("--all-snapshots",action="store_true")
-    parser.add_argument("--data-root",type=Path,required=True)
-    parser.add_argument("--state",type=Path)
-    parser.add_argument("--through",choices=("staging","silver","gold"),default="gold")
-    parser.add_argument("--service-from",type=date.fromisoformat, help="Override the first day (default: first of snapshot month)")
-    parser.add_argument("--service-to",type=date.fromisoformat, help="Override the last day (default: last of snapshot month)")
-    parser.add_argument("--history-role",choices=("primary","calendar_support"),default="primary",
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, required=True)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--date", type=date.fromisoformat)
+    group.add_argument("--all-snapshots", action="store_true")
+    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--state", type=Path)
+    parser.add_argument("--through", choices=("staging", "silver", "gold"), default="gold")
+    parser.add_argument("--service-from", type=date.fromisoformat, help="Override the first day (default: first of snapshot month)")
+    parser.add_argument("--service-to", type=date.fromisoformat, help="Override the last day (default: last of snapshot month)")
+    parser.add_argument("--history-role", choices=("primary", "calendar_support"), default="primary",
                         help="Calendar-support exports fill service dates without changing the historical observation sample")
-    parser.add_argument("--quality-thresholds",type=Path,help=f"Gold publication rules (default: {QUALITY_THRESHOLDS})")
-    parser.add_argument("--master",default="local[2]")
-    parser.add_argument("--driver-memory",type=memory_size,default=os.environ.get("DAT535_DRIVER_MEMORY","2g"))
-    args=parser.parse_args()
-    spark=None
+    parser.add_argument("--quality-thresholds", type=Path, help=f"Gold publication rules (default: {QUALITY_THRESHOLDS})")
+    parser.add_argument("--master", default="local[2]")
+    parser.add_argument("--driver-memory", type=memory_size, default=os.environ.get("DAT535_DRIVER_MEMORY", "2g"))
+    args = parser.parse_args()
+    spark = None
     try:
-        manifest=json.loads(args.manifest.read_text())
-        days=[args.date]
+        manifest = json.loads(args.manifest.read_text())
+        days = [args.date]
         if args.all_snapshots:
-            days=[date.fromisoformat(s["snapshot_date"]) for s in manifest.get("snapshots",[])
-                  if s["status"] in ("validated","validated_with_warnings")]
-            if not days: raise ValueError("No validated historical snapshots found")
-        environment = worker_environment(args.driver_memory)
+            days = [date.fromisoformat(s["snapshot_date"]) for s in manifest.get("snapshots", [])
+                    if s["status"] in ("validated", "validated_with_warnings")]
+            if not days:
+                raise ValueError("No validated historical snapshots found")
+        # The driver heap must be configured before this process starts its JVM.
         os.environ.pop("PYSPARK_GATEWAY_PORT", None)
         os.environ.pop("PYSPARK_GATEWAY_SECRET", None)
-        os.environ.update(environment)
-        from pyspark.sql import SparkSession
-        if args.master.startswith("local"):
-            os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-        spark=(SparkSession.builder.appName("DAT535-checkpointed-pipeline").master(args.master)
-            .config("spark.sql.session.timeZone","Europe/Oslo").config("spark.sql.shuffle.partitions","4")
-            .config("spark.ui.showConsoleProgress","false").getOrCreate())
-        spark.sparkContext.setLogLevel("WARN")
+        os.environ.update(worker_environment(args.driver_memory))
+        spark = start_spark("DAT535-checkpointed-pipeline", args.master)
         for day in days:
-            print(json.dumps({"snapshot":str(day),"outputs":run_snapshot(spark,args.manifest,day,args.data_root,args.state,
-                args.through,args.service_from,args.service_to,args.quality_thresholds,args.history_role)},indent=2),flush=True)
+            outputs = run_snapshot(spark, args.manifest, day, args.data_root, args.state, args.through,
+                                   args.service_from, args.service_to, args.quality_thresholds, args.history_role)
+            print(json.dumps({"snapshot": str(day), "outputs": outputs}, indent=2), flush=True)
         return 0
     except Exception as error:
-        print(f"Pipeline failed: {error_text(error)}",file=sys.stderr); return 1
+        print(f"Pipeline failed: {error_text(error)}", file=sys.stderr)
+        return 1
     finally:
         stop_spark(spark)
 
 
-if __name__ == "__main__":sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

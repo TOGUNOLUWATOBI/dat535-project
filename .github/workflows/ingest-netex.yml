@@ -99,14 +99,14 @@ jobs:
       - name: Run Spark transformation tests
         id: spark_tests
         if: steps.ingest.outcome == 'success' && inputs.check_only != true
-        run: bash scripts/run_tests.sh
+        run: bash scripts/run.sh tests
 
       - name: Process validated snapshot through Silver and Gold
         id: process
         if: steps.spark_tests.outcome == 'success'
         shell: bash
         run: |
-          bash scripts/run_processing.sh \
+          bash scripts/run.sh processing \
             --manifest "$INGESTION_OUTPUT/metadata/manifest.json" \
             --data-root "$DAT535_DATA_ROOT"
 
@@ -115,7 +115,7 @@ jobs:
         if: steps.process.outcome == 'success'
         shell: bash
         run: |
-          bash scripts/run_route_history.sh --data-root "$DAT535_DATA_ROOT"
+          bash scripts/run.sh history --data-root "$DAT535_DATA_ROOT"
 
       - name: Restart the GUI
         if: steps.history.outcome == 'success'

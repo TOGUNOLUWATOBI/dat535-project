@@ -12,9 +12,9 @@ checkpoint registry and compares consecutive snapshots line by line:
 * network stop coverage per snapshot and stops that gained or lost service;
 * every Gold service date linked to the line version valid in that snapshot (T43).
 
-Run on the school server from the project root (see scripts/run_route_history.sh):
+Run on the school server from the project root (see scripts/run.sh history):
 
-    bash scripts/run_route_history.sh --data-root /srv/dat535/data
+    bash scripts/run.sh history --data-root /srv/dat535/data
 
 Interpretation rules
 --------------------
@@ -49,26 +49,28 @@ from contextlib import contextmanager
 from datetime import date
 import fcntl
 import json
-import os
 from pathlib import Path
 import sqlite3
 import sys
 from time import perf_counter
 from uuid import uuid4
 
-from pipeline.checkpoints import digest, identity, output_inventory
-from pipeline.ingestion.generate_provider_dataset import save_json
-from pipeline.processing.bronze.xml_to_parquet import utc_now
+from pipeline.checkpoints import identity, output_inventory
+from pipeline.common import sha256_file, utc_now, write_json
 from pipeline.processing.windows import window_signature
+from pipeline.spark_runtime import start_spark
 
 SCHEMA_VERSION = 2
+# Line attributes whose change creates a new SCD version (service levels do not).
 TRACKED = ["public_codes", "names", "transport_modes", "line_kinds", "stop_set_hash", "pattern_set_hash"]
+# Change types that count as a structural change (the rest are service-level changes).
 STRUCTURAL = ["line_appeared", "line_disappeared", "public_code_changed", "name_changed",
               "transport_mode_changed", "stops_added", "stops_removed", "patterns_changed"]
 MAPPING_KEYS = {"provider", "old_line_id", "new_line_id", "from_snapshot", "to_snapshot",
                 "verified", "verified_by", "note", "source_url"}
 DISCONTINUATION_KEYS = {"provider", "line_id", "from_snapshot", "to_snapshot",
                         "verified", "verified_by", "note", "source_url"}
+# Detection thresholds; each can be overridden on the command line.
 DEFAULTS = {"frequency_threshold": 0.2, "min_departure_change": 5,
             "span_threshold_minutes": 30, "renumber_similarity": 0.6, "renumber_lookback": 1,
             "same_code_similarity": 0.2}
@@ -425,7 +427,7 @@ def service_versions(daily, covered, versions):
                          "scheduled_departures", "first_departure_seconds", "last_departure_seconds")
 
 
-def renumbering_candidates(spark, transitions, options, mapping_rows, lines=None, dates=None):
+def renumbering_candidates(spark, transitions, options, mapping_rows, lines, dates):
     """Possible renumberings/re-identifications, with manual verification joined in.
 
     Operators often publish a replacement line (or a line's new bus number) one
@@ -453,23 +455,19 @@ def renumbering_candidates(spark, transitions, options, mapping_rows, lines=None
         "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("old_line_id"),
         F.col("public_code_before").alias("old_public_code"), F.col("stop_ids_before").alias("old_stops"),
         F.col("transport_modes_before").alias("old_modes"))
-    if lines is None or dates is None:
-        added = transitions.where("status='appeared'").select(
-            "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("new_line_id"),
-            F.col("public_code_after").alias("new_public_code"), F.col("stop_ids_after").alias("new_stops"),
-            F.col("transport_modes_after").alias("new_modes"), F.col("to_snapshot").alias("new_line_since"))
-    else:
-        lookback = max(1, int(options["renumber_lookback"]))
-        windows = spark.createDataFrame(
-            [(dates[i], dates[i + 1], dates[max(0, i + 1 - lookback)]) for i in range(len(dates) - 1)],
-            ["from_snapshot", "to_snapshot", "earliest"])
-        since = lines.groupBy("provider", "line_id", "public_code").agg(F.min("snapshot_date").alias("new_line_since"))
-        current = lines.join(windows, lines.snapshot_date == windows.to_snapshot).join(
-            since, ["provider", "line_id", "public_code"])
-        added = current.where(F.col("new_line_since") >= F.col("earliest")).select(
-            "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("new_line_id"),
-            F.col("public_code").alias("new_public_code"), F.col("stop_ids").alias("new_stops"),
-            F.col("transport_modes").alias("new_modes"), "new_line_since")
+    # New-side candidates: lines in the later snapshot whose current bus number first
+    # appeared no more than ``renumber_lookback`` snapshots before it.
+    lookback = max(1, int(options["renumber_lookback"]))
+    windows = spark.createDataFrame(
+        [(dates[i], dates[i + 1], dates[max(0, i + 1 - lookback)]) for i in range(len(dates) - 1)],
+        ["from_snapshot", "to_snapshot", "earliest"])
+    since = lines.groupBy("provider", "line_id", "public_code").agg(F.min("snapshot_date").alias("new_line_since"))
+    current = lines.join(windows, lines.snapshot_date == windows.to_snapshot).join(
+        since, ["provider", "line_id", "public_code"])
+    added = current.where(F.col("new_line_since") >= F.col("earliest")).select(
+        "from_snapshot", "to_snapshot", "provider", F.col("line_id").alias("new_line_id"),
+        F.col("public_code").alias("new_public_code"), F.col("stop_ids").alias("new_stops"),
+        F.col("transport_modes").alias("new_modes"), "new_line_since")
     pairs = retired.join(added, ["from_snapshot", "to_snapshot", "provider"]).where("old_line_id != new_line_id")
     pairs = pairs.where(F.arrays_overlap(_arr("old_modes"), _arr("new_modes")) | (F.size(_arr("old_modes")) == 0))
     pairs = pairs.withColumn("stop_similarity", jaccard("old_stops", "new_stops"))
@@ -492,9 +490,7 @@ def renumbering_candidates(spark, transitions, options, mapping_rows, lines=None
     candidates = candidates.join(m, applies, "left").select(
         *columns, F.coalesce("m_verified", F.lit(False)).alias("verified"),
         F.col("m_verified_by").alias("verified_by"), F.col("m_note").alias("note"))
-    if lines is not None and dates is not None:
-        candidates = candidates.unionByName(_mapped_only(spark, lines, dates, mappings, candidates, jaccard))
-    return candidates
+    return candidates.unionByName(_mapped_only(spark, lines, dates, mappings, candidates, jaccard))
 
 
 def _mapped_only(spark, lines, dates, mappings, candidates, jaccard):
@@ -623,6 +619,7 @@ def interpret_transitions(spark, transitions, candidates, discontinuation_rows):
 
 
 def summaries(lines, transitions, coverage, stop_changes):
+    """(network_snapshots, change_summary): totals per export and per consecutive pair of exports."""
     from pyspark.sql import functions as F
     network = lines.groupBy("snapshot_date", "provider", "transport_mode").agg(
         F.count("*").alias("lines_published"),
@@ -731,7 +728,7 @@ def _read_evidence(path, kind, required, allowed):
         if key in seen:
             raise HistoryInputError(f"{where} duplicates an earlier entry")
         seen.add(key)
-    return entries, digest(path)
+    return entries, sha256_file(path)
 
 
 def read_mappings(path):
@@ -750,6 +747,11 @@ def read_discontinuations(path):
 
 def build_history(spark, inputs, output, options=None, mappings_path=None, identity_key=None,
                   discontinuations_path=None):
+    """Write every route-history table to ``output``, then run the reconciliation checks.
+
+    Any failed check marks the output ``failed`` and raises; a complete output
+    also gets an ``inventory.json`` so later runs can verify and reuse it.
+    """
     from pyspark.sql import functions as F
     started = perf_counter()
     configure_history_session(spark)
@@ -779,7 +781,7 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
                               "spark.sql.autoBroadcastJoinThreshold", "spark.sql.adaptive.autoBroadcastJoinThreshold")}},
               "tables": {}, "checks": {}}
     path = output / "metadata/manifest.json"
-    save_json(path, report)
+    write_json(path, report)
 
     def write(name, frame, partitions=1):
         from pyspark import StorageLevel
@@ -801,7 +803,7 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
         report["tables"][name] = {"path": name, "rows": expected, "schema": json.loads(saved.schema.json()),
                                   "parquet_bytes": sum(p.stat().st_size for p in target.glob("*.parquet")),
                                   "elapsed_seconds": elapsed}
-        save_json(path, report)
+        write_json(path, report)
         print(f"history/{name}: {expected:,} rows ({elapsed:.1f}s)", flush=True)
         return saved
 
@@ -897,14 +899,14 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
             raise RuntimeError("; ".join(failures))
         report["summary"] = [r.asDict() for r in summary.orderBy("from_snapshot", "provider").collect()]
         report.update(status="complete", completed_at_utc=utc_now(), elapsed_seconds=round(perf_counter() - started, 3))
-        save_json(path, report)
+        write_json(path, report)
         inventory = output_inventory(output)
-        save_json(output / "metadata/inventory.json", inventory)
+        write_json(output / "metadata/inventory.json", inventory)
         return report
     except Exception as error:
         report.update(status="failed", completed_at_utc=utc_now(), elapsed_seconds=round(perf_counter() - started, 3),
                       error=f"{type(error).__name__}: {error}")
-        save_json(path, report)
+        write_json(path, report)
         raise
 
 
@@ -913,6 +915,7 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
 
 @contextmanager
 def history_lock(root):
+    """Exclusive, non-blocking lock so only one route-history build runs per data root."""
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".lock").open("a") as handle:
         try:
@@ -926,7 +929,8 @@ def history_lock(root):
 
 
 def run_identity(inputs, options, mapping_sha, discontinuation_sha=None):
-    code = digest(Path(__file__).resolve())
+    """Hash of everything a history output depends on: this code, options, evidence files and inputs."""
+    code = sha256_file(Path(__file__).resolve())
     return identity({"schema": SCHEMA_VERSION, "code": code, "options": options, "mappings": mapping_sha,
                      "discontinuations": discontinuation_sha,
                      "inputs": [(i["snapshot_date"], i["gold_manifest_sha256"], i["silver_manifest_sha256"])
@@ -934,6 +938,7 @@ def run_identity(inputs, options, mapping_sha, discontinuation_sha=None):
 
 
 def reusable(directory, key):
+    """Newest complete output with this identity whose files still match its inventory, or None."""
     for candidate in sorted(directory.glob("history-*"), reverse=True):
         try:
             manifest = json.loads((candidate / "metadata/manifest.json").read_text())
@@ -948,6 +953,7 @@ def reusable(directory, key):
 
 def run(spark, data_root, state=None, dates=None, options=None, mappings_path=None, force=False,
         discontinuations_path=None):
+    """Build (or reuse) route history for the registry's snapshots; returns (path, manifest, reused)."""
     data_root = Path(data_root).resolve()
     options = {**DEFAULTS, **(options or {})}
     inputs = find_inputs(state or data_root / "pipeline_state.sqlite3", dates)
@@ -1003,13 +1009,7 @@ def main(argv=None):
                "renumber_lookback": args.renumber_lookback, "same_code_similarity": args.same_code_similarity}
     spark = None
     try:
-        from pyspark.sql import SparkSession
-        if args.master.startswith("local"):
-            os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-        spark = (SparkSession.builder.appName("DAT535-route-history").master(args.master)
-                 .config("spark.sql.session.timeZone", "Europe/Oslo").config("spark.sql.shuffle.partitions", "4")
-                 .config("spark.ui.showConsoleProgress", "false").getOrCreate())
-        spark.sparkContext.setLogLevel("WARN")
+        spark = start_spark("DAT535-route-history", args.master)
         output, report, reused = run(spark, args.data_root, args.state, args.dates, options, args.renumberings,
                                      args.force, args.discontinuations)
         print(f"route history {'reused' if reused else 'complete'}: {output}")

@@ -1,12 +1,15 @@
-"""Explicit Spark schemas for the first NeTEx staging projection.
+"""Explicit Spark schemas for reading NeTEx XML into staging.
 
-IDs, versions, public codes and timetable values remain strings. Unprojected
-child elements are retained as XML fragments via Spark's wildcard field.
-Original XML is authoritative for fields/attributes outside this projection.
+IDs, versions, public codes and timetable values remain strings, which keeps
+leading zeros and overnight times such as ``25:10:00`` exactly as published.
+Attributes use Spark's ``_`` prefix (``_id``, ``_version``, ``_ref``). Child
+elements outside the schema are kept as XML fragments in ``_unmapped_xml``.
+The original XML stays authoritative for anything not projected here.
 """
 
 
 def composite_frame_schema():
+    """Base CompositeFrame schema: lines, service journeys and their passing times."""
     from pyspark.sql.types import ArrayType, StringType, StructField, StructType
 
     def struct(*fields):
@@ -132,6 +135,7 @@ def complete_frame_schema():
 
 
 def stop_place_schema():
+    """National StopPlace with its quays and coordinates (from ``_stops.xml``)."""
     from pyspark.sql.types import ArrayType, StringType, StructField, StructType
     s = StringType()
     def struct(*fields):

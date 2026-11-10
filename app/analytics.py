@@ -14,6 +14,7 @@ def today_in_oslo():
 
 
 def select_service(daily, providers=None, mode="all"):
+    """Copy of the daily rows for the chosen providers (None = all) and transport mode."""
     selected = daily
     if providers is not None:
         selected = selected[selected.provider.isin(providers)]
@@ -173,6 +174,7 @@ def comparison_cutoffs(before, after, through=None):
 
 
 def compare_months(daily, items, before, after, providers=None, mode="all", line_snapshots=None, through=None):
+    """``compare_exports`` for two reconstructed months (``YYYY-MM``) instead of two exports."""
     cutoffs = comparison_cutoffs(before, after, through)
     frames = [monthly_plan_rows(daily, items, m, providers, mode, cutoffs[m])[0] for m in (before, after)]
     attributes = None

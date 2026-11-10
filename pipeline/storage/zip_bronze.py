@@ -22,39 +22,16 @@ import tempfile
 from uuid import uuid4
 import zipfile
 
+from pipeline.common import BLOCK_SIZE, sha256_file, write_json
+
+# Manifest statuses that mean a snapshot passed ingestion and validation.
 GOOD = {"complete", "complete_with_warnings", "validated", "validated_with_warnings"}
+# XML directories restored by the current call stack; nested users reuse the restoration.
 ACTIVE = ContextVar("materialized_bronze", default=frozenset())
-BLOCK = 1024 * 1024
-
-
-def checksum(path):
-    result = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(BLOCK), b""):
-            result.update(block)
-    return result.hexdigest()
-
-
-def write_json(path, data):
-    path = Path(path)
-    temporary = path.with_name(f".{path.name}-{uuid4().hex}.tmp")
-    try:
-        with temporary.open("x", encoding="utf-8") as stream:
-            json.dump(data, stream, indent=2, ensure_ascii=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def contained(base, value):
+    """Resolve a manifest path against ``base`` and refuse symlinks or anything outside it."""
     path = Path(value)
     path = path if path.is_absolute() else base / path
     if path.is_symlink() or not path.resolve().is_relative_to(base) or path.resolve() == base:
@@ -63,6 +40,12 @@ def contained(base, value):
 
 
 def specification(manifest_path, snapshot_date=None, document=None):
+    """Everything needed to verify, archive or restore one snapshot, read from its manifest.
+
+    Accepts both layouts: a historical dataset manifest with a ``snapshots`` list
+    (``snapshot_date`` required) and a single-run ``metadata/manifest.json``.
+    Lineage member names are checked here so later steps can trust them as paths.
+    """
     path = Path(manifest_path).resolve()
     document = document if document is not None else json.loads(path.read_text())
     base = path.parent.parent if path.parent.name == "metadata" else path.parent
@@ -109,6 +92,7 @@ def specification(manifest_path, snapshot_date=None, document=None):
 
 @contextmanager
 def snapshot_lock(spec):
+    """Exclusive, non-blocking lock per XML directory for archive, restore and cleanup."""
     # Coordinate clones using the same XML paths, without modifying source evidence.
     directory = Path(tempfile.gettempdir()) / f"dat535-bronze-locks-{os.getuid()}"
     directory.mkdir(mode=0o700, exist_ok=True)
@@ -125,6 +109,11 @@ def snapshot_lock(spec):
 
 
 def verify_xml(spec, allow_missing=False):
+    """Check extracted XML against lineage; return file signatures to detect later changes.
+
+    Unexpected files are refused rather than removed. With ``allow_missing``,
+    absent members are skipped (a partially restored or already released copy).
+    """
     root = spec["xml"]
     expected = {i["member"] for i in spec["lineage"]}
     if root.exists():
@@ -139,7 +128,7 @@ def verify_xml(spec, allow_missing=False):
         if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
             raise RuntimeError(f"Unsafe XML path: {path}")
         before = path.stat()
-        if not stat.S_ISREG(before.st_mode) or before.st_size != item["bytes"] or checksum(path) != item["sha256"]:
+        if not stat.S_ISREG(before.st_mode) or before.st_size != item["bytes"] or sha256_file(path) != item["sha256"]:
             raise RuntimeError(f"XML differs from source lineage: {path}")
         signature = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
         after = path.stat()
@@ -150,12 +139,17 @@ def verify_xml(spec, allow_missing=False):
 
 
 def verify_zip(spec, extract_to=None):
+    """Check the retained ZIP's hash, members, sizes, CRCs and XML hashes against lineage.
+
+    With ``extract_to``, each member is also written there while it is hashed,
+    so a restore never needs a second pass over the archive.
+    """
     archive = spec["archive"]
     expected_sha = spec["row"].get("combined_zip_sha256")
     if archive is None or archive.is_symlink() or not archive.is_file():
         raise RuntimeError("Retained ZIP is missing")
     before = archive.stat()
-    if not expected_sha or checksum(archive) != expected_sha:
+    if not expected_sha or sha256_file(archive) != expected_sha:
         raise RuntimeError(f"ZIP checksum differs from its manifest: {archive}")
     expected = {i["member"]: i for i in spec["lineage"]}
     with zipfile.ZipFile(archive) as source:
@@ -174,7 +168,7 @@ def verify_zip(spec, extract_to=None):
             with source.open(info) as stream:
                 target = destination.open("xb") if destination else None
                 try:
-                    for block in iter(lambda: stream.read(BLOCK), b""):
+                    for block in iter(lambda: stream.read(BLOCK_SIZE), b""):
                         digest.update(block)
                         if target:
                             target.write(block)
@@ -235,7 +229,7 @@ def retain_snapshot(manifest_path, snapshot_date=None, apply=False, document=Non
             if archive.exists():
                 # Recover a crash after publishing the ZIP but before committing
                 # metadata. Adopt only a full byte-for-byte lineage match.
-                candidate = {**spec, "archive": archive, "row": {**row, "combined_zip_sha256": checksum(archive)}}
+                candidate = {**spec, "archive": archive, "row": {**row, "combined_zip_sha256": sha256_file(archive)}}
                 verify_zip(candidate)
                 spec["archive"] = archive
                 return _commit_archive(spec, signatures, report)
@@ -246,7 +240,7 @@ def retain_snapshot(manifest_path, snapshot_date=None, apply=False, document=Non
                     for item in spec["lineage"]:
                         target.write(spec["xml"] / item["member"], arcname=item["member"])
                 # Check the new ZIP before publishing it or changing the manifest.
-                candidate = {**spec, "archive": partial, "row": {**row, "combined_zip_sha256": checksum(partial)}}
+                candidate = {**spec, "archive": partial, "row": {**row, "combined_zip_sha256": sha256_file(partial)}}
                 verify_zip(candidate)
                 # Link instead of replace: an unrelated existing ZIP is never overwritten.
                 os.link(partial, archive)
@@ -259,6 +253,7 @@ def retain_snapshot(manifest_path, snapshot_date=None, apply=False, document=Non
 
 
 def _commit_archive(spec, signatures, report):
+    """Record a verified ZIP in the manifest (keeping a backup copy), then release the XML."""
     archive, row = spec["archive"], spec["row"]
     report.update(already_zip=False, zip_bytes=archive.stat().st_size)
     with archive.open("rb") as stream:
@@ -274,7 +269,7 @@ def _commit_archive(spec, signatures, report):
     backup = spec["path"].parent / "storage_backups"
     backup.mkdir(exist_ok=True)
     write_json(backup / f"{uuid4().hex}-manifest.json", spec["document"])
-    new_sha = checksum(archive)
+    new_sha = sha256_file(archive)
     if row.get("combined_zip_sha256") and row["combined_zip_sha256"] != new_sha:
         row["previous_combined_zip_sha256"] = row["combined_zip_sha256"]
     row.update(raw_storage="zip", xml_only=False, combined_zip=str(archive.relative_to(spec["base"])),
@@ -349,6 +344,7 @@ def with_snapshot_xml(function):
 
 
 def migrate(root, apply=False):
+    """Move every validated snapshot under ``root`` to ZIP storage (dry run unless ``apply``)."""
     root = Path(root).resolve()
     result = {"applied": apply, "snapshots": [], "skipped": 0, "problems": []}
     for path in sorted(root.rglob("manifest.json")):

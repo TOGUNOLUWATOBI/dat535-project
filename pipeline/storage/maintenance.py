@@ -13,13 +13,13 @@ from pathlib import Path
 import stat
 from uuid import uuid4
 
-from pipeline.ingestion.generate_provider_dataset import save_json, verify_materialized_snapshot
-from pipeline.storage.zip_bronze import checksum
-
-GOOD = {"complete", "complete_with_warnings", "validated", "validated_with_warnings"}
+from pipeline.common import sha256_file, write_json
+from pipeline.ingestion.generate_provider_dataset import verify_materialized_snapshot
+from pipeline.storage.zip_bronze import GOOD
 
 
 def signature(path):
+    """Identity of a regular file (device, inode, size, mtime) to detect changes during a check."""
     s = path.lstat()
     if not stat.S_ISREG(s.st_mode):
         raise ValueError(f"Not a regular file: {path}")
@@ -69,6 +69,11 @@ def candidates(root):
 
 
 def deduplicate(root, apply=False):
+    """Replace byte-identical Bronze copies with hard links to one canonical file.
+
+    Files are grouped by recorded hash, size, device, owner and mode; each copy
+    is re-hashed and must be unchanged immediately before the atomic swap.
+    """
     files, problems = candidates(root)
     groups = defaultdict(list)
     for path, expected in files.items():
@@ -88,7 +93,7 @@ def deduplicate(root, apply=False):
                 if canonical is not None:
                     if path.samefile(canonical) or path.stat().st_nlink != 1:
                         continue
-                if checksum(path) != expected or signature(path) != before:
+                if sha256_file(path) != expected or signature(path) != before:
                     raise ValueError("File changed or checksum differs from ingestion lineage")
                 if canonical is None:
                     canonical, canonical_signature = path, before
@@ -116,7 +121,11 @@ def deduplicate(root, apply=False):
 
 
 def discard_provider_zips(root, apply=False):
-    """Remove only verified regenerable ZIP copies; retain raw XML and manual uploads."""
+    """Remove verified provider ZIPs that duplicate retained XML (for XML-retention datasets).
+
+    ZIP-backed snapshots (``raw_storage == "zip"``) and manual uploads are never
+    touched, because their ZIP is the authoritative raw copy.
+    """
     root = Path(root).resolve()
     result = {"applied": apply, "zip_copies": 0, "reclaimable_bytes": 0, "problems": []}
     for path in sorted(root.rglob("manifest.json")):
@@ -138,7 +147,7 @@ def discard_provider_zips(root, apply=False):
                 if archive.is_symlink() or not archive.is_file() or not archive.resolve().is_relative_to(root):
                     continue
                 before = signature(archive)
-                if checksum(archive) != row.get("combined_zip_sha256"):
+                if sha256_file(archive) != row.get("combined_zip_sha256"):
                     raise ValueError(f"ZIP differs from its recorded hash: {archive}")
                 day = row["snapshot_date"]
                 lineage_path = metadata / "lineage" / f"{day}.json" if "snapshots" in manifest else metadata / "lineage.json"
@@ -156,12 +165,12 @@ def discard_provider_zips(root, apply=False):
                     row.update(xml_only=True, combined_zip=None, discarded_combined_zip=name,
                                discarded_combined_zip_bytes=archive.stat().st_size)
                     # Switch readers to verified XML before removing the compressed copy.
-                    save_json(path, manifest)
+                    write_json(path, manifest)
                     archive.unlink()
                     row.update(combined_zip_removed=True, combined_zip_bytes=0)
                     if "snapshots" in manifest and "combined_zip_bytes" in manifest:
                         manifest["combined_zip_bytes"] = sum(r.get("combined_zip_bytes", 0) for r in rows)
-                    save_json(path, manifest)
+                    write_json(path, manifest)
                 result["zip_copies"] += 1
                 result["reclaimable_bytes"] += size
         except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:

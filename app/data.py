@@ -6,11 +6,11 @@ Nothing here writes to the data root. Pandas reads the small Gold Parquet tables
 directly, so the GUI needs no Spark session.
 """
 
-import json
+from datetime import date
 import hashlib
+import json
 from pathlib import Path
 import sqlite3
-from datetime import date
 
 import pandas as pd
 

@@ -1,4 +1,9 @@
-"""One Spark JVM per snapshot/history operation for the monthly rebuild."""
+"""One Spark JVM per snapshot/history operation for the monthly rebuild.
+
+``rebuild_monthly`` starts this module as a separate process for every job, so
+each job gets a fresh driver heap and a JVM failure cannot affect the next job.
+The outcome is written to ``--result`` as JSON, including after a failure.
+"""
 
 import argparse
 import json
@@ -6,8 +11,8 @@ import os
 from pathlib import Path
 import sys
 
-from pipeline.spark_runtime import error_text, stop_spark
-from pipeline.storage.zip_bronze import write_json
+from pipeline.common import write_json
+from pipeline.spark_runtime import error_text, start_spark, stop_spark
 
 
 def main(argv=None):
@@ -26,11 +31,7 @@ def main(argv=None):
     result = {"status": "running", "task": args.task, "pid": os.getpid()}
     write_json(args.result, result)
     try:
-        from pyspark.sql import SparkSession
-        spark = (SparkSession.builder.appName(f"DAT535-monthly-{args.task}").master(args.master)
-                 .config("spark.sql.session.timeZone", "Europe/Oslo").config("spark.sql.shuffle.partitions", "4")
-                 .config("spark.ui.showConsoleProgress", "false").getOrCreate())
-        spark.sparkContext.setLogLevel("WARN")
+        spark = start_spark(f"DAT535-monthly-{args.task}", args.master)
         result["runtime"] = {"driver_memory": spark.sparkContext.getConf().get("spark.driver.memory"),
                              "max_heap_bytes": spark.sparkContext._jvm.java.lang.Runtime.getRuntime().maxMemory()}
         print(f"Fresh {args.task} worker {os.getpid()}: driver heap {result['runtime']['driver_memory']}", flush=True)

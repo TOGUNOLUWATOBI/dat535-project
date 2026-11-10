@@ -1,1 +1,1 @@
-"""Bronze storage helpers; database publication remains separate."""
+"""Bronze raw storage: ZIP retention, temporary XML restoration and verified deduplication."""

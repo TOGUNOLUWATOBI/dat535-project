@@ -1,3 +1,4 @@
+# Local source datasets and verification evidence (kept outside Git)
 entur_netex_snapshots/
 audit/
 
@@ -25,8 +26,5 @@ htmlcov/
 *.log
 *.part
 
-# Generated pipeline outputs; keep the documented directory skeleton
-/data/**/*
-!/data/**/
-!/data/**/.gitkeep
-!/data/**/README.md
+# Generated pipeline outputs (local runs default to data/bronze/entur/...)
+/data/

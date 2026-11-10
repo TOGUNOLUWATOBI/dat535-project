@@ -6,6 +6,7 @@ manifests and the requested months; coverage must pass before completion.
 """
 
 import argparse
+from contextlib import closing
 from datetime import timedelta
 import json
 import os
@@ -15,12 +16,13 @@ import subprocess
 import sys
 from uuid import uuid4
 
-from pipeline.ingestion.generate_provider_dataset import save_json
+from pipeline.common import write_json
 from pipeline.processing.windows import month_bounds
 from pipeline.spark_runtime import error_text, memory_size, worker_environment
 
 
 def manifest_jobs(path, role="primary"):
+    """One job per validated snapshot in an ingestion or historical dataset manifest."""
     path = Path(path).resolve()
     manifest = json.loads(path.read_text())
     rows = manifest.get("snapshots", [manifest])
@@ -29,10 +31,12 @@ def manifest_jobs(path, role="primary"):
 
 
 def registered_jobs(root):
+    """Primary snapshots that already have a complete Gold output in the checkpoint registry."""
     state = Path(root) / "pipeline_state.sqlite3"
     if not state.is_file():
         return []
-    with sqlite3.connect(state.resolve().as_uri() + "?mode=ro", uri=True) as db:
+    # closing(): a sqlite3 connection's own context manager commits but does not close.
+    with closing(sqlite3.connect(state.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         rows = db.execute("""SELECT s.snapshot_date,s.source_manifest,a.output_path FROM snapshots s
             JOIN stage_attempts a USING(snapshot_key) WHERE a.stage='gold' AND a.status='complete'
             ORDER BY a.finished_at DESC""").fetchall()
@@ -45,6 +49,7 @@ def registered_jobs(root):
 
 
 def support_jobs(path):
+    """Calendar-support jobs from a completed support plan; each must cover one whole month."""
     path = Path(path).resolve()
     plan = json.loads(path.read_text())
     if plan.get("status") != "complete" or not plan.get("jobs"):
@@ -63,6 +68,11 @@ def support_jobs(path):
 
 
 def audit_coverage(manifests, months, expected_providers=("AKT", "KOL")):
+    """Per month, the dates not covered by any Gold output for every expected provider.
+
+    A date counts as covered only if one output's service window and each
+    provider's source calendar validity both include it.
+    """
     results = {}
     for month in sorted(set(months)):
         first, last = month_bounds(month + "-01")
@@ -108,7 +118,7 @@ def run_worker(task, target, data_root, master, driver_memory, job=None):
                "--data-root", str(Path(data_root).resolve()), "--master", master, "--result", str(target)]
     if job is not None:
         job_path = target.with_name(target.stem + "-input.json")
-        save_json(job_path, job)
+        write_json(job_path, job)
         command.extend(["--job", str(job_path)])
     process = subprocess.run(command, cwd=Path(__file__).resolve().parent.parent,
                              env=worker_environment(driver_memory), check=False)
@@ -137,7 +147,7 @@ def main(argv=None):
     (target / "workers").mkdir()
     report = {"status": "preparing", "phase": "support", "jobs": [], "outputs": [], "driver_memory": args.driver_memory,
               "execution": "one_sequential_process_per_snapshot"}
-    save_json(target / "manifest.json", report)
+    write_json(target / "manifest.json", report)
     try:
         jobs = {(j["snapshot_date"], j["history_role"]): j for j in registered_jobs(args.data_root)}
         for path in args.primary_manifest:
@@ -147,39 +157,39 @@ def main(argv=None):
             raise ValueError("Support sources must use dates distinct from the primary observation sample")
         jobs.update({(j["snapshot_date"], j["history_role"]): j for j in support})
         report.update(status="in_progress", phase="snapshots", jobs=list(jobs.values()))
-        save_json(target / "manifest.json", report)
+        write_json(target / "manifest.json", report)
         manifests = []
         for n, job in enumerate(jobs.values(), 1):
             print(f"[{n}/{len(jobs)}] Full month: {job['snapshot_date']} ({job['history_role']})", flush=True)
             report["current_job"] = job
-            save_json(target / "manifest.json", report)
+            write_json(target / "manifest.json", report)
             result = run_worker("snapshot", target / "workers" / f"snapshot-{n:03d}.json", args.data_root,
                                 args.master, args.driver_memory, job)
             outputs = result["stages"]
             report["outputs"].append({**job, "stages": outputs, "runtime": result["runtime"]})
             manifests.append(json.loads((Path(outputs["gold"]["path"]) / "metadata/manifest.json").read_text()))
-            save_json(target / "manifest.json", report)
+            write_json(target / "manifest.json", report)
         report.pop("current_job", None)
         report["phase"] = "coverage"
-        save_json(target / "manifest.json", report)
+        write_json(target / "manifest.json", report)
         report["coverage"] = audit_coverage(manifests, [j["service_from"][:7] for j in support])
         if not all(v["complete"] for v in report["coverage"].values()):
             raise RuntimeError("Full-month coverage audit failed; missing dates are recorded in the rebuild manifest")
         if not args.skip_history:
             report["phase"] = "history"
-            save_json(target / "manifest.json", report)
+            write_json(target / "manifest.json", report)
             result = run_worker("history", target / "workers/history.json", args.data_root,
                                 args.master, args.driver_memory)
             report["history"] = result["history"]
         report["status"] = "complete"
         report["phase"] = "complete"
         report.pop("current_job", None)
-        save_json(target / "manifest.json", report)
+        write_json(target / "manifest.json", report)
         print(f"COMPLETE: {target / 'manifest.json'}", flush=True)
         return 0
     except Exception as error:
         report.update(status="failed", error=error_text(error))
-        save_json(target / "manifest.json", report)
+        write_json(target / "manifest.json", report)
         print(report["error"], file=sys.stderr)
         return 1
 

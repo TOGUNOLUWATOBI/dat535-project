@@ -1,6 +1,7 @@
 """Bus and boat timetable history for Kolumbus (Rogaland) and AKT (Agder).
 
-Start with:  bash scripts/run_gui.sh
+Streamlit pages over the published Gold tables and route history; the app is
+read-only and needs no Spark session. Start with:  bash scripts/run_gui.sh
 """
 
 import os
@@ -19,6 +20,7 @@ DATA_ROOT = os.environ.get("DAT535_DATA_ROOT", "/srv/dat535/data")
 TODAY = analytics.today_in_oslo()
 PROVIDERS = {"AKT": "AKT (Agder)", "KOL": "Kolumbus (Rogaland)"}
 
+# Plain-language labels for route-history codes.
 WHAT_HAPPENED = {
     "renumbered_verified": "Replaced by a new line (confirmed)",
     "discontinued_verified": "Stopped (confirmed)",
@@ -53,6 +55,7 @@ st.markdown("""<style>
 
 @st.cache_data(ttl=60, show_spinner="Loading timetables …")
 def load(root):
+    """Published exports and their combined ``daily_line_service`` rows."""
     items = data.snapshots(root)
     daily = data.gold_table(items, "daily_line_service")
     return items, daily
@@ -60,6 +63,7 @@ def load(root):
 
 @st.cache_data(ttl=60, show_spinner="Loading route history …")
 def load_history(root):
+    """(history manifest, the tables the pages use plus a line catalog, stop names)."""
     h = data.History(root)
     tables = {name: h.table(name) for name in ("line_snapshots", "line_transitions", "line_changes",
                                                "line_versions", "stop_coverage_changes", "change_summary")}
@@ -76,6 +80,7 @@ def load_exclusions(item):
 # Small helpers
 
 def day(value):
+    """A date as ``15 Jan 2026`` (``–`` when missing)."""
     return pd.Timestamp(value).strftime("%d %b %Y").lstrip("0") if pd.notna(value) else "–"
 
 
@@ -84,6 +89,7 @@ COLORS = alt.Scale(domain=list(PROVIDERS.values()), range=["#14b8a6", "#60a5fa"]
 
 
 def stop_list(ids, lookup, limit=None):
+    """Stop IDs as readable names, optionally truncated with an "… and N more" suffix."""
     ids = list(ids)
     shown = [lookup.get(i, i) for i in ids[:limit]]
     more = len(ids) - limit if limit and len(ids) > limit else 0
@@ -110,6 +116,7 @@ def table(frame, **kwargs):
 
 
 def filters(key):
+    """Operator and transport-mode selectors; returns (providers or None for all, mode)."""
     left, right = st.columns([2, 1])
     provider = left.selectbox("Operator", ["all", *PROVIDERS], key=f"{key}_operator",
                               format_func=lambda p: "Both operators" if p == "all" else PROVIDERS[p])
@@ -619,15 +626,14 @@ def page_checks(items, history):
         checks = {k: v for k, v in manifest.get("checks", {}).items() if k != "snapshots"}
         table(pd.DataFrame({"Check": [k.replace("_", " ").capitalize() for k in checks],
                             "Value": [str(v) for v in checks.values()]}))
-        report = data.REPO / "docs/quality_report.md"
+        report = data.REPO / "docs/evidence/quality_report.md"
         if report.is_file():
             st.markdown(report.read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------
 
-PAGES = {"Overview": page_overview, "Daily service": page_daily, "Compare months": page_compare, "One line": page_line, "What changed": page_changes,
-         "Replaced lines": page_replaced, "Data checks": page_checks}
+PAGES = ["Overview", "Daily service", "Compare months", "One line", "What changed", "Replaced lines", "Data checks"]
 
 
 def main():
@@ -637,7 +643,7 @@ def main():
     through = None if include_future else TODAY.isoformat()
     st.sidebar.caption(f"Today in Norway: {day(TODAY)}. "
                        "The date limit applies to daily/monthly service metrics; history and data checks describe full published exports.")
-    page = st.sidebar.radio("Go to", list(PAGES), label_visibility="collapsed")
+    page = st.sidebar.radio("Go to", PAGES, label_visibility="collapsed")
     with st.sidebar.expander("How to read this"):
         st.markdown(
             "- **Timetable**: an export of published plans. Historical exports are sampled on the 15th, "
@@ -671,6 +677,7 @@ def main():
         with st.sidebar.expander("History status"):
             st.write(str(error))
     if history:
+        # History must be built from the same Gold outputs the other pages read.
         current = {i["snapshot_date"]: i for i in primary}
         if any(i["snapshot_date"] in current and
                (window_signature(i) != window_signature(current[i["snapshot_date"]]) or
@@ -692,14 +699,16 @@ def main():
         page_daily(items, daily, through)
     elif page == "Compare months":
         page_compare(items, daily, history, through)
-    elif page == "One line":
-        if history_required(history):
-            page_line(items, daily, history, through)
     elif page == "Data checks":
         page_checks(items, history)
-    else:
-        if history_required(history):
-            PAGES[page](history)
+    elif history_required(history):
+        # The remaining pages are built from route history.
+        if page == "One line":
+            page_line(items, daily, history, through)
+        elif page == "What changed":
+            page_changes(history)
+        else:
+            page_replaced(history)
 
 
 main()
