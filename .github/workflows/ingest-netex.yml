@@ -117,6 +117,10 @@ jobs:
         run: |
           bash scripts/run_route_history.sh --data-root "$DAT535_DATA_ROOT"
 
+      - name: Restart the GUI
+        if: steps.history.outcome == 'success'
+        run: bash scripts/run_gui.sh --restart
+
       - name: Save route-history checks and summary
         if: always() && (steps.history.outcome == 'success' || steps.history.outcome == 'failure')
         env:
