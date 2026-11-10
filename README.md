@@ -13,6 +13,10 @@ for **January–November**, and produced route history. November includes future
 published plans. These data do not establish which vehicles actually operated.
 See [verified coverage](docs/monthly_coverage.md).
 
+The GUI defaults to service dates through today in Norway. Future dates remain
+in the validated dataset and can be viewed with **Include future timetable plans**;
+the current month is not presented as a completed month by default.
+
 ## What is implemented
 
 - Historical acquisition, manual ZIP ingestion and scheduled API polling.

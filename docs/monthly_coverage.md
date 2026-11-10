@@ -12,6 +12,10 @@ These checks establish completed jobs and calendar coverage, not actual vehicle
 operations or 11 sets of independently recounted monthly totals. The detailed
 departure totals below are the separately verified January–September local run.
 
+Complete coverage means a valid published plan covers each date. The GUI defaults
+to dates through today in Norway; later November dates appear only when future
+plans are enabled. This display limit does not remove Gold data or change the audit.
+
 ## Detailed local verification — January–September
 
 Verified locally on 10 November 2026 from the rebuilt KOL + AKT dataset.

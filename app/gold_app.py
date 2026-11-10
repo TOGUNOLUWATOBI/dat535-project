@@ -16,6 +16,7 @@ from app import analytics, data  # noqa: E402
 from pipeline.processing.windows import window_signature  # noqa: E402
 
 DATA_ROOT = os.environ.get("DAT535_DATA_ROOT", "/srv/dat535/data")
+TODAY = analytics.today_in_oslo()
 PROVIDERS = {"AKT": "AKT (Agder)", "KOL": "Kolumbus (Rogaland)"}
 
 WHAT_HAPPENED = {
@@ -136,16 +137,20 @@ def history_required(history):
 # --------------------------------------------------------------------------
 # Pages
 
-def page_overview(items, daily):
+def page_overview(items, daily, through=None):
     st.header("Network overview")
     intro("Daily and monthly planned service, reconstructed from validated primary and calendar-support exports.")
     providers, mode = filters("overview")
-    series = analytics.monthly_series(daily, items, providers, mode)
+    series = analytics.monthly_series(daily, items, providers, mode, through)
+    if series.empty:
+        st.info("These timetable windows are all in the future. Enable future timetable plans to inspect them.")
+        return
     months = sorted(series.month.unique())
     selected = st.selectbox("Month to inspect", months, index=len(months) - 1,
                             format_func=lambda m: pd.Period(m, freq="M").strftime("%B %Y"), key="overview_month")
     current = series[series.month == selected]
-    profile = analytics.daily_month(daily, items, selected, providers, mode)
+    profile = analytics.daily_month(daily, items, selected, providers, mode, through)
+    period_notice(selected, through)
     covered = profile[profile.covered]
     days = len(covered)
     total = int(covered.departures.sum()) if days else None
@@ -156,8 +161,8 @@ def page_overview(items, daily):
     metric(cols[3], "Dates covered", f"{days} / {len(profile)}")
     if days < len(profile):
         st.info("This month has incomplete published coverage. Counts and averages describe covered dates only.")
-    st.caption("Full-month totals use every calendar day, including covered dates with no service. "
-               "Months have different lengths; use the daily mean and Compare exports weekday profiles when comparing them.")
+    st.caption("Totals use the selected dates, including covered dates with no service. "
+               "Months have different lengths; use the daily mean and Compare months weekday profiles when comparing them.")
     st.subheader("Planned service by month")
     chart_data = series.assign(company=series.provider.map(PROVIDERS))
     st.altair_chart(alt.Chart(chart_data).mark_line(point=True, strokeWidth=2.5).encode(
@@ -165,7 +170,7 @@ def page_overview(items, daily):
         y=alt.Y("departures:Q", title="Departures on covered dates", axis=alt.Axis(format=",")),
         color=alt.Color("company:N", title=None, scale=COLORS, legend=alt.Legend(orient="bottom")),
         tooltip=["month:N", "company:N", alt.Tooltip("departures:Q", title="Departures", format=","),
-                 "covered_days:Q", "calendar_days:Q", "mean_per_day:Q", "active_lines:Q"])
+                 "covered_days:Q", "calendar_days:Q", "period_end:N", "mean_per_day:Q", "active_lines:Q"])
         .properties(height=310), use_container_width=True)
     st.caption("This combines dated published plans, not actual operations or a claim of one observation on every day. "
                "Daily service shows which export supplied each date.")
@@ -174,11 +179,11 @@ def page_overview(items, daily):
         download(series, "monthly_service.csv")
 
 
-def page_compare(items, daily, history):
+def page_compare(items, daily, history, through=None):
     st.header("Compare months")
     intro("Compare reconstructed monthly plans, including valid calendar-support sources for early dates.")
     providers, mode = filters("compare")
-    months = sorted({i["service_from"][:7] for i in items})
+    months = sorted({i["service_from"][:7] for i in items if through is None or i["service_from"] <= str(through)})
     if len(months) < 2:
         st.info("A comparison needs at least two published months.")
         return
@@ -187,7 +192,12 @@ def page_compare(items, daily, history):
     before = left.selectbox("Earlier month", months[:-1], format_func=describe, key="compare_before")
     later = [m for m in months if m > before]
     after = right.selectbox("Later month", later, index=len(later) - 1, format_func=describe, key="compare_after")
-    profiles = {m: analytics.daily_month(daily, items, m, providers, mode) for m in (before, after)}
+    cutoffs = analytics.comparison_cutoffs(before, after, through)
+    profiles = {m: analytics.daily_month(daily, items, m, providers, mode, cutoffs[m]) for m in (before, after)}
+    if cutoffs[before] != through:
+        st.info("The later month is still in progress. Comparing matching calendar-day ranges in both months.")
+    for month in (before, after):
+        period_notice(month, cutoffs[month])
     counts = {m: int(frame.covered.sum()) for m, frame in profiles.items()}
     for month, frame in profiles.items():
         st.caption(f"{describe(month)}: {counts[month]} / {len(frame)} dates covered")
@@ -197,7 +207,7 @@ def page_compare(items, daily, history):
     if any(counts[m] < len(profiles[m]) for m in profiles):
         st.warning("Coverage is incomplete. These totals and averages describe covered dates only.")
     line_snapshots = history[1]["line_snapshots"] if history else None
-    result = analytics.compare_months(daily, items, before, after, providers, mode, line_snapshots)
+    result = analytics.compare_months(daily, items, before, after, providers, mode, line_snapshots, through)
     first, last = int(result.before.sum()), int(result.after.sum())
     pct = analytics.percentage_change(first, last)
     cols = st.columns(4)
@@ -237,14 +247,33 @@ def page_compare(items, daily, history):
                "Daily service shows source dates; verified replacements are under Replaced lines.")
 
 
-def page_daily(items, daily):
+def period_notice(month, through):
+    period = pd.Period(month, freq="M")
+    if through is not None and pd.Timestamp(through) < period.end_time.normalize():
+        st.caption(f"{period.strftime('%B %Y')}: showing {day(period.start_time)} – {day(through)} "
+                   f"({pd.Timestamp(through).day} of {period.days_in_month} calendar dates). "
+                   "Later dates are excluded from these totals.")
+    elif period.end_time.date() > TODAY:
+        st.info("This view includes future timetable plans. Dates after today are scheduled service, not completed journeys.")
+
+
+def page_daily(items, daily, through=None):
     st.header("Daily service")
     intro("Explore planned departures by operating date within a month. These are timetable plans, not actual vehicle movements.")
     providers, mode = filters("daily")
-    months = pd.period_range(min(i["service_from"] for i in items), max(i["service_to"] for i in items), freq="M")
+    end = max(i["service_to"] for i in items)
+    end = min(end, str(through)) if through is not None else end
+    months = pd.period_range(min(i["service_from"] for i in items), end, freq="M")
+    if months.empty:
+        st.info("These timetable windows are all in the future. Enable future timetable plans to inspect them.")
+        return
     month = st.selectbox("Month", [str(m) for m in months], index=len(months) - 1,
                          format_func=lambda m: pd.Period(m, freq="M").strftime("%B %Y"), key="daily_month")
-    profile = analytics.daily_month(daily, items, month, providers, mode)
+    profile = analytics.daily_month(daily, items, month, providers, mode, through)
+    period_notice(month, through)
+    profile["is_future"] = profile.service_date.dt.date > TODAY
+    profile["date_status"] = profile.is_future.map(
+        {True: "Future timetable plan", False: "Published timetable plan"}).where(profile.covered, "No published plan")
     known = profile[profile.covered]
     count = len(known)
     cols = st.columns(3)
@@ -260,7 +289,7 @@ def page_daily(items, daily):
     st.subheader("Departures each day")
     chart_data = profile.assign(date_label=profile.service_date.map(day),
                                 operating_date=profile.service_date.dt.strftime("%Y-%m-%d"))
-    tooltip = [alt.Tooltip("date_label:N", title="Date"), "weekday:N", "coverage:N",
+    tooltip = [alt.Tooltip("date_label:N", title="Date"), "weekday:N", "coverage:N", "date_status:N",
                alt.Tooltip("departures:Q", title="Departures"),
                alt.Tooltip("active_lines:Q", title="Lines with service"),
                alt.Tooltip("source_export:N", title="Source export")]
@@ -268,22 +297,23 @@ def page_daily(items, daily):
         x=alt.X("operating_date:O", sort=None, title="Operating date",
                 axis=alt.Axis(labelExpr="timeFormat(toDate(datum.label), '%d %b')", labelAngle=-45)), tooltip=tooltip)
     gaps = base.transform_filter("!datum.covered").mark_rect(color="#94a3b8", opacity=.12)
-    bars = base.mark_bar(color="#14b8a6").encode(y=alt.Y("departures:Q", title="Planned departures"))
-    zero = base.transform_filter("datum.covered && datum.departures === 0").mark_tick(
-        color="#14b8a6", thickness=2).encode(y=alt.datum(0))
+    bars = base.mark_bar().encode(y=alt.Y("departures:Q", title="Planned departures"),
+                                 color=alt.condition("datum.is_future", alt.value("#f59e0b"), alt.value("#14b8a6")))
+    zero = base.transform_filter("datum.covered && datum.departures === 0").mark_tick(thickness=2).encode(
+        y=alt.datum(0), color=alt.condition("datum.is_future", alt.value("#f59e0b"), alt.value("#14b8a6")))
     st.altair_chart((gaps + bars + zero).properties(height=280), use_container_width=True)
-    st.caption("Grey bands have no published coverage. Teal ticks mark covered dates with zero departures. "
+    st.caption("Amber marks show future plans. Grey bands have no published coverage. Ticks mark covered dates with zero departures. "
                "Uncovered dates have no count.")
     shown = profile.assign(**{"first departure": profile["first"].map(data.clock),
                               "last departure": profile["last"].map(data.clock)})
-    shown = shown.drop(columns=["covered", "first", "last"])
+    shown = shown.drop(columns=["covered", "first", "last", "is_future"])
     table(shown, column_config={"service_date": st.column_config.DateColumn("Operating date", format="DD MMM YYYY"),
                                "departures": "Planned departures", "active_lines": "Lines with service",
                                "coverage": "Coverage", "source_export": "Source export"})
     download(shown, f"daily_service_{month}_{mode}.csv")
 
 
-def page_line(items, daily, history):
+def page_line(items, daily, history, through=None):
     st.header("Line explorer")
     intro("Follow one published line: its planned service, observed versions, changes, and stops.")
     _, tables, stop_names = history
@@ -315,35 +345,41 @@ def page_line(items, daily, history):
     observed = mine[mine.snapshot_date == chosen].iloc[0]
     day_rows = daily[(daily.line_entity_id == line_id) & (daily.provider == provider)]
     month = chosen[:7]
-    monthly_rows, coverage = analytics.monthly_plan_rows(day_rows, items, month, [provider])
+    monthly_rows, coverage = analytics.monthly_plan_rows(day_rows, items, month, [provider], through=through)
+    period_notice(month, through)
     cols = st.columns(3)
-    metric(cols[0], "Planned departures in month", f"{int(monthly_rows.scheduled_departures.sum()):,}")
+    metric(cols[0], "Planned departures in selected period", f"{int(monthly_rows.scheduled_departures.sum()):,}")
     metric(cols[1], "Stops served by selected export", f"{int(observed.window_stop_count):,}")
     metric(cols[2], "Stops in route definitions", f"{int(observed.stop_count):,}")
     st.caption("Monthly departures include calendar-support plans. Stop and version details describe the selected primary export.")
     service, versions, changes, stops = st.tabs(["Service", "Observed versions", "Changes", "Stops"])
     with service:
-        trend = analytics.monthly_series(day_rows, items, [provider])
+        trend = analytics.monthly_series(day_rows, items, [provider], through=through)
         st.altair_chart(alt.Chart(trend).mark_line(point=True, color="#14b8a6").encode(
             x=alt.X("month_start:T", title="Service month", axis=alt.Axis(format="%b %Y")),
             y=alt.Y("departures:Q", title="Departures on covered dates"),
-            tooltip=["month:N", "departures:Q", "covered_days:Q", "calendar_days:Q"])
+            tooltip=["month:N", "departures:Q", "covered_days:Q", "calendar_days:Q", "period_end:N"])
             .properties(height=250), use_container_width=True)
         if not coverage.empty:
             period = pd.Period(month, freq="M")
             window = {"snapshot_date": month + "-01", "service_from": str(period.start_time.date()),
                       "service_to": str(period.end_time.date())}
-            per_day = analytics.daily_profile(monthly_rows, window)
+            per_day = analytics.daily_profile(monthly_rows, window, through)
             per_day["departures"] = per_day.departures.where(coverage.covered).astype("Int64")
             per_day["source_export"] = coverage.source_export
+            per_day["is_future"] = per_day.service_date.dt.date > TODAY
+            per_day["date_status"] = per_day.is_future.map(
+                {True: "Future timetable plan", False: "Published timetable plan"}).where(coverage.covered, "No published plan")
             per_day["first departure"] = per_day["first"].map(data.clock)
             per_day["last departure"] = per_day["last"].map(data.clock)
             st.subheader("Each day in the selected month")
-            st.altair_chart(alt.Chart(per_day).mark_bar(color="#14b8a6", cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+            st.altair_chart(alt.Chart(per_day).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
                 x=alt.X("service_date:T", title=None, axis=alt.Axis(format="%a %d %b")),
-                y=alt.Y("departures:Q", title="Departures"), tooltip=["weekday:N", "departures:Q", "first departure:N", "last departure:N"])
+                y=alt.Y("departures:Q", title="Departures"),
+                color=alt.condition("datum.is_future", alt.value("#f59e0b"), alt.value("#14b8a6")),
+                tooltip=["weekday:N", "departures:Q", "date_status:N", "first departure:N", "last departure:N"])
                 .properties(height=200), use_container_width=True)
-            download(per_day.drop(columns=["first", "last"]), f"line_{provider}_{chosen}_{info.number}.csv")
+            download(per_day.drop(columns=["first", "last", "is_future"]), f"line_{provider}_{chosen}_{info.number}.csv")
     with versions:
         st.caption("First/last seen are observation dates in published exports. Operating dates may differ.")
         v = tables["line_versions"]
@@ -518,7 +554,8 @@ def page_replaced(history):
 
 def page_checks(items, history):
     st.header("Data checks")
-    intro("The gate checks each export before publication. Daily service separately reports calendar-date coverage. "
+    intro("The gate checks each export's full published timetable, including future service dates. "
+          "Daily and monthly service views use the selected date limit. "
           "Older results may predate the quality gate.")
     gates = [(i["gold_manifest"].get("quality_gate") or {}).get("status", "not recorded") for i in items]
     cols = st.columns(3)
@@ -596,12 +633,16 @@ PAGES = {"Overview": page_overview, "Daily service": page_daily, "Compare months
 def main():
     st.sidebar.title("🚌 Timetable history")
     st.sidebar.caption("Kolumbus · Rogaland\n\nAKT · Agder")
+    include_future = st.sidebar.checkbox("Include future timetable plans", value=False, key="include_future")
+    through = None if include_future else TODAY.isoformat()
+    st.sidebar.caption(f"Today in Norway: {day(TODAY)}. "
+                       "The date limit applies to daily/monthly service metrics; history and data checks describe full published exports.")
     page = st.sidebar.radio("Go to", list(PAGES), label_visibility="collapsed")
     with st.sidebar.expander("How to read this"):
         st.markdown(
             "- **Timetable**: an export of published plans. Historical exports are sampled on the 15th, "
             "January–September 2026; additional calendar-support exports fill early dates. Later exports come from scheduled ingestion.\n"
-            "- **Trips**: planned departures in the full calendar month. These are plans, "
+            "- **Trips**: planned departures on the selected dates (through today by default). These are plans, "
             "not buses that actually ran.\n"
             "- **Confirmed**: the operator announced the change on its website.\n"
             "- A difference between exports shows a change in the published plans. "
@@ -642,18 +683,18 @@ def main():
         last_history = history[1]["line_snapshots"].snapshot_date.max()
         st.sidebar.caption(f"Route history through {day(last_history)}")
         if last_history < items[-1]["snapshot_date"]:
-            st.info(f"Departures are available through {day(items[-1]['snapshot_date'])}. "
+            st.info(f"The latest source export is dated {day(items[-1]['snapshot_date'])}. "
                     f"Route history currently ends at {day(last_history)}.")
 
     if page == "Overview":
-        page_overview(items, daily)
+        page_overview(items, daily, through)
     elif page == "Daily service":
-        page_daily(items, daily)
+        page_daily(items, daily, through)
     elif page == "Compare months":
-        page_compare(items, daily, history)
+        page_compare(items, daily, history, through)
     elif page == "One line":
         if history_required(history):
-            page_line(items, daily, history)
+            page_line(items, daily, history, through)
     elif page == "Data checks":
         page_checks(items, history)
     else:

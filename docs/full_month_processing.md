@@ -110,8 +110,12 @@ the service-window policy, source calendar coverage and history role. Journey
 dates are also bounded by their own XML frame validity.
 
 Overview, Daily service, Compare months and line service profiles use the same
-dated reconstruction. Totals include all covered days; means divide by calendar
-days, including zero-service days. Month lengths and weekday mixes differ, so
+dated reconstruction. The GUI defaults to service dates through today in Oslo;
+an explicit future-plans option shows the full published month. The underlying
+Gold windows and coverage audit always retain the full calendar month.
+An unfinished month is compared with matching dates in the earlier month.
+Totals include the selected covered days; means include covered zero-service
+days. Month lengths and weekday mixes differ, so
 comparisons show coverage, daily means and weekday profiles. Route-history
 changes and stop details remain measurements of each primary export, not the
 stitched monthly network. Historical seven-day reports are labelled as such.

@@ -38,7 +38,22 @@ calendar days, including days with no service. A new or missing service in a
 service window does not establish that a route opened or closed; holidays
 and seasonal plans also affect counts.
 
-Daily service includes every calendar date in the selected month. A date is
+Daily/monthly service metrics default to operating dates through **today in
+Europe/Oslo**. Completed months stay whole; the current month stops at today,
+and wholly future months are hidden. **Include future timetable plans** restores
+the full published windows. Future dates are explicitly labelled in daily tables
+and CSV downloads and shown in amber in daily charts. They are published plans,
+not proof that a journey has happened. Today's figures include that operating
+date's whole timetable, not only departures before the current clock time.
+
+When the later comparison month is still in progress, both months use matching
+day ranges, capped to the shorter month's length. The displayed date ranges and
+covered-date denominators show what was compared. Monthly CSVs retain the true
+`calendar_days` plus `period_days` and `period_end` for the selected view.
+Comparison CSVs record `earlier_period_end` and `later_period_end` as well.
+History and data checks retain the full published exports and their audit totals.
+
+Daily service includes every calendar date in the selected period. A date is
 covered only if a published output's window and source-calendar validity include
 it for the full provider selection. Overlapping windows use the latest such
 export for the whole date, even if observed later; missing lines are not

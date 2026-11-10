@@ -1069,3 +1069,30 @@ preservation, partial test windows and the hardlink choice, rather than narratin
 obvious assignments. The GUI environment passed 171 discovered tests with 21
 Spark skips; the Spark environment passed the same suite with 28 GUI skips.
 Together they executed every one of the 171 cases. No raw data was deleted.
+
+
+10 November 2026 - Showing an unfinished month honestly
+
+The user spotted November dates through the 30th in the GUI even though today
+was the 10th. The raw timetable can legitimately contain those future plans,
+but a full-month display was not the default the user wanted. We agreed to show
+service dates through today by default, with an explicit option for the full
+published plan. The current date comes from Europe/Oslo, not the server's UTC
+calendar. The whole current operating day's plan is included; these still are
+not actual completed vehicle journeys.
+
+Overview, Daily service and line service totals now apply that date limit.
+Past months stay whole. The future-plans checkbox restores the whole window;
+future daily entries are labelled and coloured amber. Unknown dates remain
+unknown, not fake zero service. An unfinished month comparison uses matching
+day ranges in both months, capped to the shorter month's length. Monthly and
+comparison CSVs record their period endpoints so a partial-month export is not
+mistaken for a full-month total later.
+
+Gold still retains and validates the full published month. No source files,
+Gold tables or checkpoints were changed or rebuilt for this display correction.
+History and Data checks retain their published-export scope, explained in the
+sidebar and page text. Tests fixed today at 10 November: the daily table stopped
+at the 10th by default, the full option showed all 30 dates with 20 future labels,
+and the October/November comparison used matching first-ten-day totals. The
+existing real Gold dataset also passed all seven GUI pages after the change.

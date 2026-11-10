@@ -154,3 +154,78 @@ class GoldAnalyticsTests(unittest.TestCase):
                                                "Invalid service occurrence", "Not classified", "Not classified", "Not classified"])
         self.assertNotIn("reason", rows.columns)
         self.assertEqual(exclusion_reasons(pd.DataFrame({"journey": [1]})).reason.iloc[0], "Not classified")
+
+    def test_current_month_cutoff_keeps_future_plans_out_of_totals_and_exports(self):
+        import pandas as pd
+        from app.analytics import daily_month, monthly_plan_rows, monthly_series
+        daily, items = current_month_fixture()
+        original = daily.copy(deep=True)
+        profile = daily_month(daily, items, "2026-11", through="2026-11-10")
+        self.assertEqual(len(profile), 10)
+        self.assertEqual(profile.departures.sum(), 30)
+        self.assertEqual(profile.service_date.max(), pd.Timestamp("2026-11-10"))
+        rows, _ = monthly_plan_rows(daily, items, "2026-11", through="2026-11-10")
+        self.assertTrue((rows.service_date <= pd.Timestamp("2026-11-10")).all())
+        series = monthly_series(daily, items, through="2026-11-10").set_index("month")
+        self.assertEqual(series.loc["2026-11", "departures"], 30)
+        self.assertEqual(series.loc["2026-11", "calendar_days"], 30)
+        self.assertEqual(series.loc["2026-11", "period_days"], 10)
+        self.assertEqual(series.loc["2026-11", "period_end"], "2026-11-10")
+        self.assertEqual(series.loc["2026-10", "departures"], 170)
+        self.assertEqual(daily_month(daily, items, "2026-11").departures.sum(), 330)
+        pd.testing.assert_frame_equal(daily, original)
+
+    def test_unfinished_month_comparison_uses_matching_elapsed_date_ranges(self):
+        from app.analytics import compare_months, comparison_cutoffs
+        result = compare_months(*current_month_fixture(), "2026-10", "2026-11", through="2026-11-10")
+        self.assertEqual((result.before.sum(), result.after.sum(), result.change.sum()), (20, 30, 10))
+        self.assertEqual(result.earlier_period_end.iloc[0], "2026-10-10")
+        self.assertEqual(result.later_period_end.iloc[0], "2026-11-10")
+        full = compare_months(*current_month_fixture(), "2026-10", "2026-11")
+        self.assertEqual((full.before.sum(), full.after.sum()), (170, 330))
+        cutoffs = comparison_cutoffs("2028-02", "2028-03", "2028-03-30")
+        self.assertEqual([v.day for v in cutoffs.values()], [29, 29])
+        self.assertEqual(comparison_cutoffs("2026-10", "2026-11", "2026-11-30"),
+                         {"2026-10": "2026-11-30", "2026-11": "2026-11-30"})
+
+    def test_future_only_month_returns_an_empty_period_with_a_display_cutoff(self):
+        from app.analytics import daily_month, monthly_series
+        daily, items = current_month_fixture()
+        self.assertTrue(daily_month(daily, items, "2026-11", through="2026-10-31").empty)
+        series = monthly_series(daily, items, through="2026-09-30")
+        self.assertTrue(series.empty)
+        self.assertIn("month", series.columns)
+
+    def test_line_profile_respects_the_same_cutoff(self):
+        from app.analytics import daily_profile
+        daily, items = current_month_fixture()
+        profile = daily_profile(daily, items[1], through="2026-11-10")
+        self.assertEqual(len(profile), 10)
+        self.assertEqual(profile.departures.sum(), 30)
+
+    def test_today_uses_norwegian_date_at_the_utc_midnight_boundary(self):
+        from datetime import date, datetime, timezone
+        from unittest.mock import patch
+        from app.analytics import today_in_oslo
+        instant = datetime(2026, 11, 9, 23, 30, tzinfo=timezone.utc)
+        with patch("app.analytics.datetime") as clock:
+            clock.now.side_effect = lambda tz: instant.astimezone(tz)
+            self.assertEqual(today_in_oslo(), date(2026, 11, 10))
+
+
+def current_month_fixture():
+    """Future service is deliberately large so leaking it changes visible totals."""
+    import pandas as pd
+    rows = []
+    for month, source, dates in [
+        ("2026-10", "2026-10-15", [(1, 5), (10, 15), (11, 50), (31, 100)]),
+        ("2026-11", "2026-11-09", [(1, 10), (10, 20), (11, 100), (30, 200)]),
+    ]:
+        rows.extend((source, "AKT", "line", "10", "bus", f"{month}-{day:02d}", count) for day, count in dates)
+    daily = pd.DataFrame(rows, columns=["snapshot_date", "provider", "line_entity_id", "line_public_code",
+                                       "line_transport_mode", "service_date", "scheduled_departures"])
+    daily["first_departure_seconds"], daily["last_departure_seconds"] = 21600, 79200
+    items = [{"snapshot_date": source, "service_from": month + "-01", "service_to": month + end,
+              "gold_manifest": {"providers": ["AKT"]}}
+             for month, source, end in [("2026-10", "2026-10-15", "-31"), ("2026-11", "2026-11-09", "-30")]]
+    return daily, items

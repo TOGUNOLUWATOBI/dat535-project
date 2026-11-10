@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from tests.gui.test_analytics import service_fixture
+from tests.gui.test_analytics import current_month_fixture, service_fixture
 
 
 @unittest.skipUnless(importlib.util.find_spec("streamlit") and importlib.util.find_spec("pandas"),
@@ -70,6 +70,8 @@ class GuiInteractionTests(unittest.TestCase):
         values = self.metrics(app)
         self.assertEqual(values["Dates with published coverage"], "7 / 28")
         self.assertEqual(values["Departures on covered dates"], "55")
+        shown = app.dataframe[0].value
+        self.assertEqual((shown.date_status == "No published plan").sum(), 21)
         self.assertTrue(any("21 dates have no published coverage" in info.value for info in app.info))
         app.selectbox(key="daily_operator").set_value("AKT").run()
         app.selectbox(key="daily_mode").set_value("Boat").run()
@@ -106,6 +108,28 @@ class GuiInteractionTests(unittest.TestCase):
         self.assertEqual(values["Published exports"], "3")
         self.assertEqual(values["Passed quality gate"], "1")
         self.assertEqual(values["Warnings / older unchecked"], "2")
+
+    def test_november_defaults_to_today_and_full_plan_requires_opt_in(self):
+        from datetime import date
+        self.enterContext(patch("app.analytics.today_in_oslo", return_value=date(2026, 11, 10)))
+        daily, items = current_month_fixture()
+        app = self.run_app(items, daily)
+        self.assertEqual(self.metrics(app)["Planned departures"], "30")
+        app.sidebar.radio[0].set_value("Daily service").run()
+        self.assertEqual(self.metrics(app)["Dates with published coverage"], "10 / 10")
+        table = app.dataframe[0].value
+        self.assertEqual(len(table), 10)
+        self.assertEqual(str(table.service_date.max().date()), "2026-11-10")
+        app.sidebar.checkbox(key="include_future").set_value(True).run()
+        self.assertEqual(self.metrics(app)["Departures on covered dates"], "330")
+        table = app.dataframe[0].value
+        self.assertEqual(len(table), 30)
+        self.assertEqual((table.date_status == "Future timetable plan").sum(), 20)
+        self.assertTrue(any("future timetable plans" in message.value for message in app.info))
+        app.sidebar.checkbox(key="include_future").set_value(False).run()
+        app.sidebar.radio[0].set_value("Compare months").run()
+        values = self.metrics(app)
+        self.assertEqual((values["Earlier departures"], values["Later departures"]), ("20", "30"))
 
 
 if __name__ == "__main__":
