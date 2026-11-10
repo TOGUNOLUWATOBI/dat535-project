@@ -53,6 +53,67 @@ A run with the same inputs, code, options and evidence files reuses the earlier
 output. Pass `--force` to rebuild. Outputs go to
 `DATA_ROOT/gold/entur/history/<identity>/history-<id>/`.
 
+## Memory use and processing time
+
+The 10 November run failed while writing `stop_coverage_changes`, after saving
+72,323 coverage rows. Spark exhausted its Java heap while building a broadcast
+hash table. This was a Java-memory failure, not a disk-full error. The other
+messages about pandas compatibility and the native Hadoop library were warnings.
+
+The history job now uses a bounded sequence:
+
+1. Compute one output table, using a temporary `DISK_ONLY` cache so its count
+   check and write do not evaluate the same joins twice.
+2. Write and verify the Parquet output, then release that cache immediately
+   with `unpersist(blocking=True)`, including when a write fails.
+3. Read the saved `stop_coverage` table before comparing consecutive exports.
+   The comparison no longer repeats its original stop-definition/name joins.
+
+Both `spark.sql.autoBroadcastJoinThreshold` and
+`spark.sql.adaptive.autoBroadcastJoinThreshold` are set to `-1` for the history
+session. This prevents automatic broadcast joins from constructing large hash
+tables in the driver's heap. Spark still needs working memory for tasks, and
+shuffle joins can use temporary disk space; this is not a promise of zero RAM
+use. Other pipeline Spark sessions keep their existing settings. See the
+[Spark join documentation](https://spark.apache.org/docs/4.2.0/sql-performance-tuning.html#automatically-broadcasting-joins).
+
+The manifest records the actual JVM heap limit and SQL settings in `runtime`,
+the total `elapsed_seconds`, and the elapsed time for each output table.
+GitHub's route-history report includes those timings. Temporary caches are
+released; the published tables, raw XML and failed-run evidence are preserved.
+
+The [failed run](https://github.com/TOGUNOLUWATOBI/dat535-project/actions/runs/42814695326)
+had this breakdown, before the memory fix:
+
+| Step | Time |
+| --- | --- |
+| Basic tests | 2 s |
+| Ingestion | 43 s |
+| Full Spark tests | 3 min 36 s |
+| Snapshot Silver/Gold processing | 28 s |
+| History, ending in the heap failure | 1 min 47 s |
+
+Most elapsed time was in tests, so memory cleanup alone will not remove that
+cost. A successful full server rerun is needed to measure the production speed
+change; no speedup is assumed from a local fixture.
+
+Local regression testing with a **1 GiB Java heap** passed all 17 history tests,
+including 79,200 coverage rows and 636,933 national stop-name rows across eleven
+synthetic snapshots. The comparison produced exactly 3,000 gained and 3,000
+lost window-service stops, with no definition changes or broadcast exchange in
+its plan. Success and failed-write tests verified that no persisted RDD cache
+was left behind. The synthetic case is larger in coverage rows than the failed
+run, but it does not reproduce every property of the school dataset.
+
+After updating the server checkout, history can be retried without ingestion:
+
+```bash
+bash scripts/run_route_history.sh --data-root /srv/dat535/data
+```
+
+The retry uses completed Silver/Gold checkpoints and writes a new history
+attempt. The failed output is not overwritten or deleted.
+
 ## Output tables
 
 | Table | One row per | Task |

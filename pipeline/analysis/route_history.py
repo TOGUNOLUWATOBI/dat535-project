@@ -53,6 +53,7 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+from time import perf_counter
 from uuid import uuid4
 
 from pipeline.checkpoints import digest, identity, output_inventory
@@ -526,8 +527,8 @@ def _mapped_only(spark, lines, dates, mappings, candidates, jaccard):
 MEASURES = {"definitions": "stop_ids", "window_service": "window_stop_ids"}
 
 
-def stop_coverage(lines, stop_names, dates, spark):
-    """Stop coverage per snapshot under two measures, and stops whose coverage changed.
+def stop_coverage(lines, stop_names):
+    """Stop coverage per snapshot under two measures.
 
     ``definitions``: the stop is in a published journey pattern of the line.
     ``window_service``: a fixed journey of the line serves the stop on a date in the
@@ -547,6 +548,13 @@ def stop_coverage(lines, stop_names, dates, spark):
     for measure in MEASURES:
         coverage = coverage.withColumn(f"line_codes_{measure}", _arr(f"line_codes_{measure}"))
     coverage = coverage.join(stop_names, ["snapshot_date", "stop_id"], "left").withColumnRenamed("name", "stop_name")
+    return coverage
+
+
+def stop_coverage_changes(coverage, dates, spark):
+    """Compare the saved coverage table, without repeating its definition/name joins."""
+    from functools import reduce
+    from pyspark.sql import functions as F
     pairs = spark.createDataFrame(list(zip(dates[:-1], dates[1:])), ["from_snapshot", "to_snapshot"])
     changes = []
     for measure in MEASURES:
@@ -567,7 +575,17 @@ def stop_coverage(lines, stop_names, dates, spark):
             F.coalesce("lines_before", F.lit(0)).alias("lines_before"),
             F.coalesce("lines_after", F.lit(0)).alias("lines_after"),
             _arr("line_codes_before").alias("line_codes_before"), _arr("line_codes_after").alias("line_codes_after")))
-    return coverage, reduce(lambda x, y: x.unionByName(y), changes)
+    return reduce(lambda x, y: x.unionByName(y), changes)
+
+
+def configure_history_session(spark):
+    """Keep automatic hash-table broadcasts out of this history session's driver heap.
+
+    AQE has a separate threshold, so disabling only the static planner is not
+    sufficient when the caller supplies an adaptive broadcast setting.
+    """
+    for key in ("spark.sql.autoBroadcastJoinThreshold", "spark.sql.adaptive.autoBroadcastJoinThreshold"):
+        spark.conf.set(key, "-1")
 
 
 def interpret_transitions(spark, transitions, candidates, discontinuation_rows):
@@ -733,6 +751,8 @@ def read_discontinuations(path):
 def build_history(spark, inputs, output, options=None, mappings_path=None, identity_key=None,
                   discontinuations_path=None):
     from pyspark.sql import functions as F
+    started = perf_counter()
+    configure_history_session(spark)
     options = {**DEFAULTS, **(options or {})}
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -752,21 +772,37 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
                           "it is not an effective date. Disappeared lines are only called renumbered or "
                           "discontinued with a verified source. All transport modes are included; bus-only "
                           "departures are reported separately."),
+              "runtime": {"spark_version": spark.version, "master": spark.sparkContext.master,
+                          "driver_heap_max_bytes": spark.sparkContext._jvm.java.lang.Runtime.getRuntime().maxMemory(),
+                          "sql": {key: spark.conf.get(key) for key in (
+                              "spark.sql.shuffle.partitions", "spark.sql.adaptive.enabled",
+                              "spark.sql.autoBroadcastJoinThreshold", "spark.sql.adaptive.autoBroadcastJoinThreshold")}},
               "tables": {}, "checks": {}}
     path = output / "metadata/manifest.json"
     save_json(path, report)
 
     def write(name, frame, partitions=1):
+        from pyspark import StorageLevel
         target = output / name
-        expected = frame.count()
-        frame.coalesce(partitions).write.mode("errorifexists").option("compression", "snappy").parquet(str(target))
-        saved = spark.read.parquet(str(target))
-        if saved.count() != expected:
-            raise RuntimeError(f"{name}: read-back count mismatch")
+        started = perf_counter()
+        # Count and write the same materialization, rather than evaluating a large
+        # lazy join plan twice. Cache blocks go to Spark's temporary disk storage
+        # and are released after this table, including on a failed write.
+        frame = frame.persist(StorageLevel.DISK_ONLY)
+        try:
+            expected = frame.count()
+            frame.coalesce(partitions).write.mode("errorifexists").option("compression", "snappy").parquet(str(target))
+            saved = spark.read.parquet(str(target))
+            if saved.count() != expected:
+                raise RuntimeError(f"{name}: read-back count mismatch")
+        finally:
+            frame.unpersist(blocking=True)
+        elapsed = round(perf_counter() - started, 3)
         report["tables"][name] = {"path": name, "rows": expected, "schema": json.loads(saved.schema.json()),
-                                  "parquet_bytes": sum(p.stat().st_size for p in target.glob("*.parquet"))}
+                                  "parquet_bytes": sum(p.stat().st_size for p in target.glob("*.parquet")),
+                                  "elapsed_seconds": elapsed}
         save_json(path, report)
-        print(f"history/{name}: {expected:,} rows", flush=True)
+        print(f"history/{name}: {expected:,} rows ({elapsed:.1f}s)", flush=True)
         return saved
 
     try:
@@ -788,9 +824,11 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
         versions, covered = build_versions(lines, dates, candidates)
         versions = write("line_versions", versions)
         dated = write("line_service_versions", service_versions(daily, covered, versions), 2)
-        coverage, stop_changes = stop_coverage(lines, stop_names, dates, spark)
-        coverage = write("stop_coverage", coverage, 2)
-        stop_changes = write("stop_coverage_changes", stop_changes)
+        # Materialize first, then derive changes from the read-back table. Keeping
+        # the original lazy plan here repeats all stop-definition/name joins in
+        # each before/after branch and can exhaust the driver's broadcast heap.
+        coverage = write("stop_coverage", stop_coverage(lines, stop_names), 2)
+        stop_changes = write("stop_coverage_changes", stop_coverage_changes(coverage, dates, spark))
         network, summary = summaries(lines, transitions, coverage, stop_changes)
         write("network_snapshots", network)
         summary = write("change_summary", summary)
@@ -858,13 +896,14 @@ def build_history(spark, inputs, output, options=None, mappings_path=None, ident
         if failures:
             raise RuntimeError("; ".join(failures))
         report["summary"] = [r.asDict() for r in summary.orderBy("from_snapshot", "provider").collect()]
-        report.update(status="complete", completed_at_utc=utc_now())
+        report.update(status="complete", completed_at_utc=utc_now(), elapsed_seconds=round(perf_counter() - started, 3))
         save_json(path, report)
         inventory = output_inventory(output)
         save_json(output / "metadata/inventory.json", inventory)
         return report
     except Exception as error:
-        report.update(status="failed", completed_at_utc=utc_now(), error=f"{type(error).__name__}: {error}")
+        report.update(status="failed", completed_at_utc=utc_now(), elapsed_seconds=round(perf_counter() - started, 3),
+                      error=f"{type(error).__name__}: {error}")
         save_json(path, report)
         raise
 

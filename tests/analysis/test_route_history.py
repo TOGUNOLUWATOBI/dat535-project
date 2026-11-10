@@ -113,6 +113,8 @@ class RouteHistorySparkTests(unittest.TestCase):
                      .config("spark.sql.shuffle.partitions", "2").config("spark.sql.session.timeZone", "Europe/Oslo")
                      .getOrCreate())
         cls.spark.sparkContext.setLogLevel("ERROR")
+        from pipeline.analysis.route_history import configure_history_session
+        configure_history_session(cls.spark)
 
     @classmethod
     def tearDownClass(cls):
@@ -267,6 +269,9 @@ class RouteHistorySparkTests(unittest.TestCase):
             report = build_history(self.spark, inputs, root / "history", mappings_path=mapping,
                                    identity_key="test", discontinuations_path=stops_file)
             self.assertEqual(report["status"], "complete")
+            self.assertEqual(report["runtime"]["sql"]["spark.sql.autoBroadcastJoinThreshold"], "-1")
+            self.assertEqual(report["runtime"]["sql"]["spark.sql.adaptive.autoBroadcastJoinThreshold"], "-1")
+            self.assertEqual(self.spark.sparkContext._jsc.sc().getPersistentRDDs().size(), 0)
             checks = report["checks"]
             self.assertTrue(all(s["ok"] for s in checks["snapshots"]))
             gold = sum(d for entries in NETWORK.values() for _, _, _, d in entries)
@@ -309,6 +314,58 @@ class RouteHistorySparkTests(unittest.TestCase):
                               discontinuations_path=stops_file)
             manifest = json.loads((root / "history/metadata/manifest.json").read_text())
             self.assertEqual(manifest["status"], "failed")
+
+    def test_failed_table_write_releases_temporary_cache(self):
+        from unittest.mock import patch
+        from pipeline.analysis.route_history import build_history
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inputs = [self.write_snapshot(root, day) for day in DATES]
+            with patch("pyspark.sql.readwriter.DataFrameWriter.parquet", side_effect=RuntimeError("write failed")):
+                with self.assertRaisesRegex(RuntimeError, "write failed"):
+                    build_history(self.spark, inputs, root / "history")
+            self.assertEqual(self.spark.sparkContext._jsc.sc().getPersistentRDDs().size(), 0)
+            report = json.loads((root / "history/metadata/manifest.json").read_text())
+            self.assertEqual(report["status"], "failed")
+
+    def test_saved_stop_coverage_scales_without_broadcasts(self):
+        """79,200 coverage rows and 636,933 national names: larger than the failed job."""
+        from pyspark.sql import functions as F
+        from pipeline.analysis.route_history import stop_coverage, stop_coverage_changes
+        dates = [f"2026-{month:02}-15" for month in range(1, 12)]
+        date_values = F.array(*[F.lit(day) for day in dates])
+        base = (self.spark.range(11 * 2 * 300)
+                .withColumn("month_index", F.floor(F.col("id") / 600).cast("int"))
+                .withColumn("line_number", (F.col("id") % 300).cast("int")))
+        lines = (base.withColumn("snapshot_date", F.element_at(date_values, F.col("month_index") + 1))
+                 .withColumn("provider", F.when(F.col("id") % 600 < 300, "AKT").otherwise("KOL"))
+                 .withColumn("line_id", F.concat("provider", F.lit(":Line:"), F.col("line_number")))
+                 .withColumn("public_code", F.col("line_number").cast("string"))
+                 .withColumn("stop_ids", F.transform(
+                     F.sequence(F.col("line_number") * 12, F.col("line_number") * 12 + 11),
+                     lambda n: F.concat(F.lit("NSR:StopPlace:"), n)))
+                 .withColumn("window_stop_ids", F.when(F.col("month_index") % 2 == 0, F.col("stop_ids"))
+                             .otherwise(F.slice("stop_ids", 1, 11))))
+        names = (self.spark.range(11 * 57903)
+                 .withColumn("snapshot_date", F.element_at(date_values, (F.floor(F.col("id") / 57903) + 1).cast("int")))
+                 .withColumn("stop_id", F.concat(F.lit("NSR:StopPlace:"), F.col("id") % 57903))
+                 .withColumn("name", F.concat(F.lit("Stop "), F.col("id") % 57903))
+                 .select("snapshot_date", "stop_id", "name"))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stop_coverage(lines, names).write.parquet(str(root / "coverage"))
+            saved = self.spark.read.parquet(str(root / "coverage"))
+            self.assertEqual(saved.count(), 79200)
+            changes = stop_coverage_changes(saved, dates, self.spark)
+            changes.coalesce(1).write.parquet(str(root / "changes"))
+            result = self.spark.read.parquet(str(root / "changes"))
+            counts = {(r.measure, r.change_type): r["count"]
+                      for r in result.groupBy("measure", "change_type").count().collect()}
+            self.assertEqual(counts, {("window_service", "stop_lost"): 3000,
+                                      ("window_service", "stop_gained"): 3000})
+            plan = changes._jdf.queryExecution().executedPlan().toString()
+            self.assertNotIn("BroadcastExchange", plan)
+            self.assertNotIn("Range (", plan)  # only saved coverage, not the original range/name joins
 
     # ---- Silver/Gold fixture writer --------------------------------------
 

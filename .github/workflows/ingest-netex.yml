@@ -124,11 +124,13 @@ jobs:
           if not runs:
               raise SystemExit('No route-history output found')
           manifest = json.loads(runs[-1].read_text())
-          keep = ('status', 'error', 'identity', 'started_at_utc', 'completed_at_utc', 'meaning',
+          keep = ('status', 'error', 'identity', 'started_at_utc', 'completed_at_utc', 'elapsed_seconds', 'runtime', 'meaning',
                   'renumbering_mappings', 'discontinuations', 'checks', 'summary')
           # The newest output may predate this run if the step failed before writing one.
           report = {'step_outcome': os.environ['HISTORY_OUTCOME'], 'path': str(runs[-1].parent.parent),
                     **{k: manifest.get(k) for k in keep}}
+          report['table_timings_seconds'] = {name: entry.get('elapsed_seconds')
+                                            for name, entry in manifest.get('tables', {}).items()}
           target = Path(os.environ['INGESTION_OUTPUT']) / 'metadata' / 'route_history.json'
           target.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
           print(f"route history {report['status']}: {report['path']}")
