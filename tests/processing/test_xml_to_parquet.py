@@ -105,6 +105,13 @@ class SourceSelectionTests(unittest.TestCase):
                     load_sources(target)
                 result = load_sources(target, date(2026, 1, 15))
                 self.assertEqual(result["expected_rows"]["passing_times"], 4)
+                partial = json.loads(target.read_text())
+                partial["status"] = "failed"
+                partial["snapshots"].append({"snapshot_date":"2026-02-01","status":"failed"})
+                target.write_text(json.dumps(partial))
+                self.assertEqual(load_sources(target,date(2026,1,15))["expected_rows"]["passing_times"],4)
+                with self.assertRaisesRegex(ValueError,"missing or not validated"):
+                    load_sources(target,date(2026,2,1))
 
 
 @unittest.skipUnless(importlib.util.find_spec("pyspark"), "Install requirements-processing.txt to run real Spark integration tests")

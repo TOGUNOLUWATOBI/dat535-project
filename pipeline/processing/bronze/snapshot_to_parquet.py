@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from pipeline.ingestion.generate_provider_dataset import save_json
+from pipeline.storage.zip_bronze import with_snapshot_xml
 from .netex_schema import complete_frame_schema, stop_place_schema
 from .staging_sources import load_snapshot_sources, verify_sources
 from .xml_to_parquet import add_context, projected_tables, utc_now
@@ -49,6 +50,7 @@ def reference_tables(frames):
     return tables
 
 
+@with_snapshot_xml
 def convert_snapshot(spark, manifest_path, output, snapshot_date=None, selection=None):
     from pyspark import StorageLevel
     from pyspark.sql import functions as F

@@ -1,12 +1,13 @@
 """Validated Silver projections and bounded service dates for one snapshot."""
 
-from datetime import date, timedelta
+from datetime import date
 import json
 from pathlib import Path
 
 from pipeline.ingestion.generate_provider_dataset import save_json
 from pipeline.processing.bronze.xml_to_parquet import utc_now
 from .calendars import expand_calendars
+from pipeline.processing.windows import service_window, window_signature
 
 
 def occurrence(role):
@@ -46,7 +47,7 @@ def lookup(source, target, ref, version, prefix, local=True, provider=True, extr
         prefix + "resolved", F.col(prefix + "matches") == 1)
 
 
-def build_silver(spark, staging, output, service_from=None, service_to=None):
+def build_silver(spark, staging, output, service_from=None, service_to=None, history_role="primary"):
     from pyspark.sql import functions as F, Window
     from pyspark.sql.types import DateType, StringType, StructField, StructType
     staging, output = Path(staging).resolve(), Path(output).resolve()
@@ -55,14 +56,16 @@ def build_silver(spark, staging, output, service_from=None, service_to=None):
         raise ValueError("Silver requires complete snapshot staging, including shared definitions")
     if output.is_relative_to(staging) or staging.is_relative_to(output):
         raise ValueError("Silver output must be separate from staging")
-    first = date.fromisoformat(str(service_from or source["snapshot_date"]))
-    last = date.fromisoformat(str(service_to)) if service_to else first + timedelta(days=6)
-    if last < first or (last-first).days > 365: raise ValueError("Service window must contain 1–366 days")
+    first, last = service_window(source["snapshot_date"], service_from, service_to)
+    if history_role not in ("primary", "calendar_support"):
+        raise ValueError("Unknown history role")
     output.mkdir(parents=True, exist_ok=False); (output / "metadata").mkdir()
     report = {"schema_version": 1, "layer": "silver", "status": "in_progress",
               "snapshot_date": source["snapshot_date"], "providers": source["providers"],
               "source_manifest": str(staging / "metadata/manifest.json"), "started_at_utc": utc_now(),
-              "service_from": str(first), "service_to": str(last), "tables": {}, "quality": {}}
+              "service_from": str(first), "service_to": str(last), "history_role": history_role,
+              "tables": {}, "quality": {}}
+    report["service_window_policy"] = window_signature(report)[0]
     path = output / "metadata/manifest.json"; save_json(path, report)
     def read(name): return spark.read.parquet(str(staging / source["tables"][name]["path"]))
     def write(name, frame):
@@ -149,6 +152,15 @@ def build_silver(spark, staging, output, service_from=None, service_to=None):
         # small reference tables are collected for date/exception resolution.
         calendar_frames = {n: read(n) for n in ("day_types", "operating_periods", "operating_days", "day_type_assignments")}
         day_rows = calendar_frames["day_types"].collect()
+        # Shared calendar validity bounds the dates for which a complete provider
+        # plan is available. A later export cannot invent its discarded early days.
+        coverage = {}
+        for provider in source["providers"]:
+            rows = [r for r in day_rows if r.provider == provider]
+            starts = [r.valid_from[:10] for r in rows if r.valid_from]
+            ends = [r.valid_to[:10] for r in rows if r.valid_to]
+            coverage[provider] = {"from": max([str(first), *starts]), "to": min([str(last), *ends])} if rows else None
+        report["source_calendar_coverage"] = coverage
         calendar, calendar_errors = expand_calendars(day_rows, calendar_frames["operating_periods"].collect(),
             calendar_frames["operating_days"].collect(), calendar_frames["day_type_assignments"].collect(), first, last)
         schema = StructType([StructField("provider", StringType()), StructField("day_type_id", StringType()),
@@ -260,7 +272,11 @@ def build_silver(spark, staging, output, service_from=None, service_to=None):
         final = write("journeys", final.withColumn("is_valid", F.size("reason_codes")==0))
         write("quarantine_journeys", final.where("NOT is_valid"))
         dated = dated.join(final.select("journey_key", "provider", "snapshot_date", "line_entity_id", "line_entity_version",
-            "line_public_code", "line_transport_mode", "is_flexible", "is_valid", "first_departure_seconds", "last_arrival_seconds"),"journey_key","inner")
+            "line_public_code", "line_transport_mode", "is_flexible", "is_valid", "first_departure_seconds", "last_arrival_seconds",
+            "valid_from", "valid_to"),"journey_key","inner")
+        dated = dated.where((F.col("valid_from").isNull() | (F.col("service_date") >= F.to_date(F.substring("valid_from",1,10))))
+                            & (F.col("valid_to").isNull() | (F.col("service_date") <= F.to_date(F.substring("valid_to",1,10)))))
+        dated = dated.drop("valid_from", "valid_to")
         dated = write("journey_service_dates", dated)
         input_counts = {n:source["tables"][n]["rows"] for n in ("lines", "service_journeys", "passing_times")}
         if report["tables"]["lines"]["rows"] != input_counts["lines"] or report["tables"]["journeys"]["rows"] != input_counts["service_journeys"] or report["tables"]["passing_times"]["rows"] != input_counts["passing_times"]:

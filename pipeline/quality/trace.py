@@ -27,7 +27,7 @@ import os
 from pathlib import Path
 import sys
 
-from pipeline.quality.source_checks import SourceIndex, SourceReferenceError, entities
+from pipeline.quality.source_checks import SourceIndex, SourceReferenceError, entities, frame_validity
 
 NS = "{http://www.netex.org.uk/netex}"
 DAYS = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
@@ -86,6 +86,7 @@ def source_calendar(xml_paths):
     """DayTypes, OperatingPeriods, OperatingDays and DayTypeAssignments from the provider's files."""
     day_types, periods, days, assignments = {}, {}, {}, defaultdict(list)
     versions = {}
+    validity = {}
     def define(collection, element, value):
         identifier, version = element.get("id"), element.get("version")
         key = (element.tag, identifier)
@@ -93,8 +94,10 @@ def source_calendar(xml_paths):
             raise SourceReferenceError(f"Conflicting or multiversion calendar definition: {identifier}")
         collection[identifier], versions[key] = value, version
     for path in xml_paths:
+        bounds = frame_validity(path)
         for tag, element in entities(path):
             if tag == "DayType":
+                validity[element.get("id")] = bounds
                 weekdays = set()
                 tokens = [t for prop in element.iter(NS + "PropertyOfDay") for t in (text(prop, "DaysOfWeek") or "").split()]
                 for token in tokens:
@@ -120,18 +123,20 @@ def source_calendar(xml_paths):
                     "date": text(element, "Date"), "period": ref(element, "OperatingPeriodRef"),
                     "day": ref(element, "OperatingDayRef"),
                     "available": available in ("true", "1")})
-    return day_types, periods, days, assignments
+    return day_types, periods, days, assignments, validity
 
 
 def operating_dates(day_type_ids, calendar, first, last):
     """Dates in [first, last] on which any of the day types operates, and the exceptions applied."""
-    day_types, periods, days, assignments = calendar
+    day_types, periods, days, assignments = calendar[:4]
+    validity = calendar[4] if len(calendar) > 4 else {}
     as_date = lambda value: date.fromisoformat(value[:10])
     operating, exceptions = set(), []
     for day_type in day_type_ids:
         if day_type not in day_types:
             raise SourceReferenceError(f"Missing DayType: {day_type}")
         weekdays = day_types[day_type]
+        valid_from, valid_to = validity.get(day_type, (None, None))
         choices = defaultdict(list)
         for a in assignments.get(day_type, []):
             if sum(bool(a[k]) for k in ("date", "day", "period")) != 1:
@@ -148,7 +153,9 @@ def operating_dates(day_type_ids, calendar, first, last):
                 dates = {first + timedelta(n) for n in range((last - first).days + 1)
                          if start <= first + timedelta(n) <= end}
             for day in dates:
-                if first <= day <= last and (specific or not a["available"] or day.weekday() in weekdays):
+                if (first <= day <= last and (valid_from is None or str(day) >= valid_from)
+                        and (valid_to is None or str(day) <= valid_to)
+                        and (specific or not a["available"] or day.weekday() in weekdays)):
                     choices[day].append((2 if specific else 1, a["available"]))
         for day, rules in choices.items():
             priority = max(rank for rank, _ in rules)
@@ -237,6 +244,13 @@ def pick_examples(spark, silver, staging, first, last):
 
 
 def trace(spark, silver, gold, staging, journey_key, kind, context=None):
+    from pipeline.storage.zip_bronze import snapshot_xml
+    source = json.loads((Path(staging) / "metadata/manifest.json").read_text())
+    with snapshot_xml(source["source_manifest"], source["snapshot_date"]):
+        return _trace(spark, silver, gold, staging, journey_key, kind, context)
+
+
+def _trace(spark, silver, gold, staging, journey_key, kind, context=None):
     from pyspark.sql import functions as F
     s_manifest = json.loads((silver / "metadata/manifest.json").read_text())
     g_manifest = json.loads((gold / "metadata/manifest.json").read_text())
@@ -255,6 +269,7 @@ def trace(spark, silver, gold, staging, journey_key, kind, context=None):
     index, calendar = context.provider(journey.provider)
     src = source_journey(line_file, journey.entity_id, journey.entity_version)
     source_dates, exceptions = operating_dates(src["day_types"], calendar, first, last)
+    source_dates = index.bounded_dates(line_file, source_dates)
     physical = index.physical_stops(line_file, (src["pattern"], src["pattern_version"]),
                                    src["passing_times"], [f["source_file"] for f in staging_manifest["stop_files"]])
     checks = compare_passing_times(src["passing_times"], [t.asDict() for t in times], physical)

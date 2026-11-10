@@ -19,9 +19,9 @@ on its persistent disk. The workflow targets runner labels
 `[self-hosted, linux, dat535]`. See [GitHub's runner label documentation](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/use-in-a-workflow).
 
 This polls Entur's public archive metadata/download API for planned timetables.
-It does not collect real-time vehicle positions or delays. The workflow runs
-only ingestion; Silver, Gold, database publication and comparisons still need
-implementation.
+It does not collect real-time vehicle positions or delays. The workflow runs ingestion, verifies duplicate-storage consolidation, tests
+Spark transformations, and updates Silver, Gold and route history. Database
+publication remains separate.
 
 ## Current installation — 24 October 2026
 
@@ -220,11 +220,12 @@ without repository activity. See [GitHub's schedule documentation](https://docs.
    expected size and MD5. Download that exact object generation.
 3. Verify source size, MD5, SHA-256 and the national ZIP's member CRCs.
 4. Select `KOL_*`, `AKT_*`, their provider shared XML, and the full `_stops.xml`.
-   Store original XML and a compact ZIP without rewriting XML.
+   Store original XML without rewriting it; scheduled XML-only mode creates no compact ZIP.
 5. Reuse our XML parsing, publication-date and provider reference checks. Record
    source repeats as warnings; missing provider references fail the run.
 6. Remove the fetched national ZIP only after extraction and validation pass.
-   Keep selected XML/ZIP, metadata, source URL, generation and checksums.
+   Keep selected XML, metadata, source URL, generation and checksums. Consolidate
+   checksum-verified identical files through hardlinks, preserving every path.
    Failed or interrupted sources are retained. Upload a copy of the report to GitHub.
    Failed validation marks the server manifest as failed and fails the job;
    downstream processing must accept only `complete` or `complete_with_warnings`
@@ -248,15 +249,19 @@ With `DAT535_DATA_ROOT=/srv/dat535/data`, each execution writes:
 └── bronze/entur/run-RUN_ID-ATTEMPT/
     ├── metadata/       Manifest, source metadata, lineage and validation report
     ├── national/       Failed/interrupted sources; successful ZIP removed after validation
-    ├── xml/DATE/       Unmodified KOL + AKT XML and national stops
-    └── zip/            Compact copy of the selected XML
+    ├── zip/            Retained KOL + AKT XML and national stops, compressed unchanged
+    └── xml/DATE/       Temporary extraction during validation/processing
 ```
 
 A metadata-only check creates just `metadata/`; it does not claim ZIP or XML
 validation. These server directories are retained across runs and reboots,
 subject to the school's disk and mount configuration. Successful scheduled runs
 remove their national ZIP after validation, recording `national_removed=true`.
-Selected XML/ZIP and metadata have no automatic expiry. Full ingestion checks
+The workflow uses `--zip-only --remove-national-after-validation`: selected raw
+XML stays inside its ZIP, metadata has no automatic expiry, and processing
+removes its verified extracted copy when the snapshot finishes or raises an error.
+An interrupted process can leave a cache that is verified and recovered on the
+next run. New unique ZIPs still consume space. See [storage maintenance](storage_maintenance.md). Full ingestion checks
 for 2 GiB free before checkout/download. Storage capacity and backups still need
 to account for growth in selected data. A removed national ZIP can currently
 be re-downloaded from its saved source URL/generation while Entur retains it;
@@ -303,7 +308,8 @@ RUN/
 For a particular source day, use `--date YYYY-MM-DD`. For a custom destination,
 use `--output PATH` with a new directory. Existing output directories are refused.
 Add `--remove-national-after-validation` to discard the national ZIP after a
-successful run. Without that option, manual polling retains the national ZIP.
+successful run. Add `--xml-only` to avoid creating a compact provider ZIP.
+Without those options, manual polling retains both ZIP representations.
 Paths in the manifest and lineage are relative to this run directory. Keep the
 folders together when copying a run. To restore loose XML from its compact copy,
 extract the selected ZIP into `xml/DATE/`.

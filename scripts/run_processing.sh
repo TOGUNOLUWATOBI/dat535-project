@@ -9,5 +9,6 @@ if [[ -f "$runtime_metadata" ]]; then
   export JAVA_HOME="$("$spark_python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["java_home"])' "$runtime_metadata")"
 fi
 if [[ -n "${JAVA_HOME:-}" ]]; then export PATH="$JAVA_HOME/bin:$PATH"; fi
+unset SPARK_HOME  # use the Spark 4.2 bundled with spark-env
 export PYSPARK_PYTHON="$spark_python"
 exec "$spark_python" -B -u -m pipeline.run_snapshot "$@"

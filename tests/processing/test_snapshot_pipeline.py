@@ -7,12 +7,13 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import zlib
 
 from pipeline.ingestion.download_entur_netex import file_checksums
 from pipeline.ingestion.generate_provider_dataset import validate_snapshot
 
 
-def complete_fixture(root,bad_time=False,bad_calendar=False):
+def complete_fixture(root,bad_time=False,bad_calendar=False,full_month=False):
     xml=root/'xml/2026-01-15';xml.mkdir(parents=True);metadata=root/'metadata';metadata.mkdir()
     def publication(body):return '<PublicationDelivery xmlns="http://www.netex.org.uk/netex" version="1.15:NO-NeTEx-networktimetable:1.5"><PublicationTimestamp>2026-01-15T00:00:00</PublicationTimestamp><dataObjects>'+body+'</dataObjects></PublicationDelivery>'
     for provider,number,flexible in [('KOL','007',False),('AKT','007',False),('AKT','008',False),('KOL','HentMeg',True)]:
@@ -30,6 +31,8 @@ def complete_fixture(root,bad_time=False,bad_calendar=False):
 <TimetabledPassingTime id="{provider}:Time:repeat" version="1"><StopPointInJourneyPatternRef ref="{provider}:Point:1"/>{timing1}</TimetabledPassingTime>
 <TimetabledPassingTime id="{provider}:Time:repeat" version="1"><StopPointInJourneyPatternRef ref="{provider}:Point:2"/>{timing2}</TimetabledPassingTime>
 </passingTimes></ServiceJourney></vehicleJourneys></TimetableFrame></frames></CompositeFrame>'''
+        if full_month:
+            body=body.replace('2026-01-15T00:00:00','2026-01-01T00:00:00').replace('2026-01-21T00:00:00','2026-01-31T00:00:00')
         (xml/f'{provider}_{number}.xml').write_text(publication(body))
     for p in ('KOL','AKT'):
         body=f'''<CompositeFrame id="{p}:CompositeFrame:shared" version="1"><frames><ServiceFrame id="{p}:ServiceFrame:shared" version="1"><scheduledStopPoints><ScheduledStopPoint id="{p}:Stop:1" version="1"><Name>First</Name></ScheduledStopPoint><ScheduledStopPoint id="{p}:Stop:2" version="1"/></scheduledStopPoints><stopAssignments><PassengerStopAssignment id="{p}:Assignment:1" version="1"><ScheduledStopPointRef ref="{p}:Stop:1" version="1"/><QuayRef ref="NSR:Quay:1"/></PassengerStopAssignment><PassengerStopAssignment id="{p}:Assignment:2" version="1"><ScheduledStopPointRef ref="{p}:Stop:2" version="1"/><QuayRef ref="NSR:Quay:2"/></PassengerStopAssignment></stopAssignments></ServiceFrame>
@@ -40,12 +43,14 @@ def complete_fixture(root,bad_time=False,bad_calendar=False):
 </dayTypeAssignments></ServiceCalendarFrame></frames></CompositeFrame>'''
         if bad_calendar and p=='AKT':
             body=body.replace('</DaysOfWeek>','</DaysOfWeek><HolidayTypes>PublicHoliday</HolidayTypes>')
+        if full_month:
+            body=body.replace('2026-01-15T00:00:00','2026-01-01T00:00:00').replace('2026-01-21T00:00:00','2026-01-31T00:00:00')
         (xml/f'_{p}_shared_data.xml').write_text(publication(body))
     (xml/'_stops.xml').write_text(publication('<SiteFrame id="NSR:SiteFrame:1" version="1"><stopPlaces><StopPlace id="NSR:StopPlace:1" version="1"><Name>Test station</Name><quays><Quay id="NSR:Quay:1" version="1"><Name>First</Name></Quay><Quay id="NSR:Quay:2" version="1"/></quays></StopPlace></stopPlaces></SiteFrame>'))
     lineage=[]
     for p in sorted(xml.glob('*.xml')):
         provider=next((v for v in ('KOL','AKT') if p.name.startswith(v+'_') or p.name.startswith('_'+v+'_')),None)
-        lineage.append({'member':p.name,'xml_path':str(p.relative_to(root)),'provider':provider,'bytes':p.stat().st_size,'sha256':file_checksums(p)[0],'source_crc32':0})
+        lineage.append({'member':p.name,'xml_path':str(p.relative_to(root)),'provider':provider,'bytes':p.stat().st_size,'sha256':file_checksums(p)[0],'source_crc32':zlib.crc32(p.read_bytes())})
     report=validate_snapshot(xml,lineage,['KOL','AKT'],date(2026,1,15))
     if report['status'] not in ('passed','passed_with_warnings'):raise AssertionError(report)
     (metadata/'validation.json').write_text(json.dumps(report));(metadata/'lineage.json').write_text(json.dumps(lineage))
@@ -86,6 +91,8 @@ class SnapshotPipelineTests(unittest.TestCase):
         self.assertEqual(dates.count(),20)
         self.assertEqual(dates.where("service_date='2026-01-16'").count(),0)
         gold_manifest=json.loads((gold/'metadata/manifest.json').read_text())
+        self.assertEqual((gold_manifest['service_from'],gold_manifest['service_to']),('2026-01-01','2026-01-31'))
+        self.assertEqual(self.spark.read.parquet(str(gold/'daily_network_service')).count(),62)
         reconciliation=gold_manifest['reconciliation']
         self.assertEqual(reconciliation['gold_scheduled_departures'],15)
         self.assertEqual(reconciliation['excluded_service_occurrences'],5)
@@ -144,6 +151,52 @@ class SnapshotPipelineTests(unittest.TestCase):
         repeat=run_snapshot(self.spark,manifest,None,self.root/'data')
         self.assertTrue(all(stage['reused'] for stage in repeat.values()))
         self.assertEqual(result['gold']['path'],repeat['gold']['path'])
+
+    def test_zip_migration_reuses_checkpoints_and_raw_trace_without_retaining_xml(self):
+        from pipeline.run_snapshot import run_snapshot
+        from pipeline.storage.zip_bronze import retain_snapshot, snapshot_xml
+        from pipeline.quality.trace import trace
+        from pipeline.ingestion.prepare_monthly_support import covers_month
+        manifest = complete_fixture(self.root / 'bronze', full_month=True)
+        outputs = run_snapshot(self.spark, manifest, None, self.root / 'data')
+        xml = manifest.parent.parent / 'xml/2026-01-15'
+        original = {p.name: p.read_bytes() for p in xml.iterdir()}
+        retain_snapshot(manifest, apply=True)
+        self.assertFalse(xml.exists())
+        self.assertTrue(covers_month(manifest, date(2026,1,15), date(2026,1,1), date(2026,1,31), ['KOL','AKT']))
+        self.assertFalse(xml.exists())
+        repeated = run_snapshot(self.spark, manifest, None, self.root / 'data')
+        self.assertTrue(all(stage['reused'] for stage in repeated.values()))
+        self.assertEqual(outputs['gold']['path'], repeated['gold']['path'])
+        self.assertFalse(xml.exists())
+        gold, silver, staging = (Path(outputs[name]['path']) for name in ('gold','silver','staging'))
+        journey = self.spark.read.parquet(str(silver/'journeys')).where("source_member='AKT_007.xml'").first()
+        checked = trace(self.spark, silver, gold, staging, journey.journey_key, 'zip-backed')
+        self.assertTrue(checked['ok'], checked['checks'])
+        self.assertFalse(xml.exists())
+        # A new output root forces real Spark XML reads from a restored ZIP snapshot.
+        rebuilt = run_snapshot(self.spark, manifest, None, self.root / 'new-data')
+        self.assertFalse(any(stage['reused'] for stage in rebuilt.values()))
+        totals = self.spark.read.parquet(str(Path(rebuilt['gold']['path'])/'daily_network_service'))
+        self.assertEqual(totals.agg({'scheduled_departures':'sum'}).first()[0], 66)
+        with snapshot_xml(manifest):
+            self.assertEqual({p.name:p.read_bytes() for p in xml.iterdir()}, original)
+        self.assertFalse(xml.exists())
+
+    def test_full_month_retains_service_before_the_fifteenth_and_after_the_twenty_first(self):
+        from pipeline.run_snapshot import run_snapshot
+        manifest=complete_fixture(self.root/'bronze',full_month=True)
+        outputs=run_snapshot(self.spark,manifest,None,self.root/'data')
+        gold=Path(outputs['gold']['path'])
+        network=self.spark.read.parquet(str(gold/'daily_network_service'))
+        self.assertEqual(network.count(),62)
+        self.assertEqual(network.where("service_date='2026-01-01'").agg({'scheduled_departures':'sum'}).first()[0],3)
+        self.assertEqual(network.where("service_date='2026-01-30'").agg({'scheduled_departures':'sum'}).first()[0],3)
+        self.assertEqual(network.where("service_date='2026-01-31'").agg({'scheduled_departures':'sum'}).first()[0],0)
+        self.assertEqual(network.where('NOT is_source_covered').count(),0)
+        saved=json.loads((gold/'metadata/manifest.json').read_text())
+        self.assertEqual(saved['reconciliation']['gold_scheduled_departures'],66)
+        self.assertEqual(saved['reconciliation']['excluded_service_occurrences'],22)
     def test_invalid_times_are_quarantined_and_the_quality_gate_stops_gold(self):
         from pipeline.run_snapshot import run_snapshot
         manifest=complete_fixture(self.root/'bronze',bad_time=True)

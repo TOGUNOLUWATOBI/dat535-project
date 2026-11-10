@@ -46,6 +46,16 @@ class ScheduledIngestionTests(unittest.TestCase):
         response.status = 200
         return response
 
+    def test_xml_only_cleanup_keeps_exact_xml_without_either_zip_copy(self):
+        with patch('urllib.request.urlopen',side_effect=lambda *a,**k:self.http_response()):
+            result=poller.ingest_snapshot(self.day,self.output,remove_national_after_validation=True,xml_only=True)
+        self.assertIn(result['status'],('complete','complete_with_warnings'))
+        self.assertIsNone(result['combined_zip'])
+        self.assertEqual(list(self.output.rglob('*.zip')),[])
+        with zipfile.ZipFile(self.source) as original:
+            for raw in (self.output/result['xml_directory']).glob('*.xml'):
+                self.assertEqual(raw.read_bytes(),original.read(raw.name))
+
     def test_success_keeps_originals_pins_generation_and_writes_portable_lineage(self):
         with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule", "RUNNER_NAME": "dat535-spark"}), \
                 patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()) as request:
@@ -118,6 +128,21 @@ class ScheduledIngestionTests(unittest.TestCase):
         self.assertEqual(metadata.call_count, 3)
         self.assertEqual(self.manifest()["status"], "failed")
         self.assertEqual(len(self.manifest()["request_failures"]), 3)
+
+    def test_zip_only_poll_keeps_original_members_without_permanent_xml(self):
+        from pipeline.storage.zip_bronze import snapshot_xml
+        with patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()):
+            result = poller.ingest_snapshot(self.day, self.output, remove_national_after_validation=True, zip_only=True)
+        self.assertEqual(result["raw_storage"], "zip")
+        xml = self.output / result["xml_directory"]
+        self.assertFalse(xml.exists())
+        self.assertFalse((self.output / result["national_zip"]).exists())
+        with zipfile.ZipFile(self.source) as source, zipfile.ZipFile(self.output / result["combined_zip"]) as saved:
+            for member in saved.namelist():
+                self.assertEqual(saved.read(member), source.read(member))
+        with snapshot_xml(self.output / "metadata/manifest.json"):
+            self.assertTrue(xml.exists())
+        self.assertFalse(xml.exists())
 
     def test_checksum_failure_is_fatal_and_preserves_downloaded_bytes(self):
         self.identity["md5Hash"] = "incorrect"

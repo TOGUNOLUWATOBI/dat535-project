@@ -95,3 +95,96 @@ def weekday_comparison(daily, items, before, after, providers=None, mode="all"):
         grouped = profile.groupby("weekday").departures.mean().reindex(WEEKDAYS)
         frames.append(grouped.rename("departures").reset_index().assign(snapshot_date=snapshot))
     return pd.concat(frames, ignore_index=True)
+
+
+def daily_month(daily, items, month, providers=None, mode="all"):
+    """Calendar dates with one whole valid published plan per day.
+
+    Overlapping windows use the latest covering export. This is a reconstructed
+    month of published plans, not what was known on each operating date.
+    Missing lines in that export are not backfilled from older plans.
+    Unprocessed dates remain null; covered dates without service are zero.
+    """
+    period = pd.Period(month, freq="M")
+    calendar = pd.DataFrame({"service_date": pd.date_range(period.start_time, period.end_time)})
+    sources = []
+    for operating_day in calendar.service_date.dt.strftime("%Y-%m-%d"):
+        def covers(item):
+            # Select a complete combined export independently of the UI filter,
+            # so an operator's count does not change when another is selected.
+            operators = item["gold_manifest"]["providers"]
+            coverage = item["gold_manifest"].get("source_calendar_coverage")
+            return (item["service_from"] <= operating_day <= item["service_to"] and
+                    (coverage is None or all((coverage.get(p) or {}).get("from", "9999") <= operating_day
+                                             <= (coverage.get(p) or {}).get("to", "0000") for p in operators)))
+        candidates = [i["snapshot_date"] for i in items if covers(i)]
+        sources.append(max(candidates) if candidates else None)
+    calendar["source_export"] = sources
+    calendar["covered"] = calendar.source_export.notna()
+    selected = select_service(daily, providers, mode)
+    selected["service_date"] = pd.to_datetime(selected.service_date)
+    # Join the chosen export first: adding all snapshots would count overlap twice.
+    chosen = selected.merge(calendar, left_on=["service_date", "snapshot_date"],
+                            right_on=["service_date", "source_export"], how="inner")
+    chosen["_line"] = list(zip(chosen.provider, chosen.line_entity_id))
+    totals = chosen.groupby("service_date").agg(
+        departures=("scheduled_departures", "sum"), active_lines=("_line", "nunique"),
+        first=("first_departure_seconds", "min"), last=("last_departure_seconds", "max"))
+    result = calendar.join(totals, on="service_date")
+    for name in ("departures", "active_lines"):
+        result[name] = result[name].fillna(0).where(result.covered).astype("Int64")
+    result["weekday"] = result.service_date.dt.day_name()
+    result["coverage"] = result.covered.map({True: "Published window", False: "Not covered"})
+    return result
+
+
+def monthly_series(daily, items, providers=None, mode="all"):
+    """Monthly totals reconstructed from the same dated plans as Daily service."""
+    operators = sorted(providers if providers is not None else
+                       {p for item in items for p in item["gold_manifest"]["providers"]})
+    months = pd.period_range(min(i["service_from"] for i in items), max(i["service_to"] for i in items), freq="M")
+    rows = []
+    for month in months:
+        for provider in operators:
+            chosen, profile = monthly_plan_rows(daily, items, str(month), [provider], mode)
+            known = profile[profile.covered]
+            rows.append({"month": str(month), "month_start": month.start_time, "provider": provider,
+                         "departures": int(known.departures.sum()) if len(known) else None,
+                         "active_lines": chosen.line_entity_id.nunique(), "covered_days": len(known),
+                         "calendar_days": len(profile),
+                         "mean_per_day": float(known.departures.mean()) if len(known) else None})
+    return pd.DataFrame(rows)
+
+
+def monthly_plan_rows(daily, items, month, providers=None, mode="all"):
+    """Chosen line/day rows for a month, retaining each source export date."""
+    profile = daily_month(daily, items, month, providers, mode)
+    selected = select_service(daily, providers, mode)
+    selected["service_date"] = pd.to_datetime(selected.service_date)
+    result = selected.merge(profile[profile.covered][["service_date", "source_export"]],
+                            left_on=["service_date", "snapshot_date"],
+                            right_on=["service_date", "source_export"], how="inner")
+    result["snapshot_date"] = month + "-01"
+    return result, profile
+
+
+def compare_months(daily, items, before, after, providers=None, mode="all", line_snapshots=None):
+    frames = [monthly_plan_rows(daily, items, m, providers, mode)[0] for m in (before, after)]
+    attributes = None
+    if line_snapshots is not None and not line_snapshots.empty:
+        attributes = line_snapshots.sort_values("snapshot_date").copy()
+        attributes["snapshot_date"] = attributes.snapshot_date.str[:7] + "-01"
+        attributes = attributes.drop_duplicates(["provider", "line_id", "snapshot_date"], keep="last")
+    return compare_exports(pd.concat(frames, ignore_index=True), before + "-01", after + "-01",
+                           providers, mode, attributes)
+
+
+def exclusion_reasons(frame):
+    """Label each retained occurrence; unknown flags never become valid/invalid guesses."""
+    result = frame.copy()
+    result["reason"] = "Not classified"
+    if {"is_valid", "is_flexible"}.issubset(result.columns):
+        known_type = result.is_flexible.isin([True, False])
+        result.loc[result.is_valid.eq(False) & known_type, "reason"] = "Invalid service occurrence"
+        result.loc[result.is_valid.eq(True) & result.is_flexible.eq(True), "reason"] = "Valid on-demand service"
+    return result

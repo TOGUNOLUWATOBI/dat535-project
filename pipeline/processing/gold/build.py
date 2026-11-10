@@ -21,6 +21,9 @@ def build_gold(spark, silver, output, thresholds=None):
     report = {"schema_version": 1, "layer": "gold", "status": "in_progress",
               "snapshot_date": source["snapshot_date"], "providers": source["providers"],
               "service_from": source["service_from"], "service_to": source["service_to"],
+              "service_window_policy": source.get("service_window_policy", "relative"),
+              "history_role": source.get("history_role", "primary"),
+              "source_calendar_coverage": source.get("source_calendar_coverage"),
               "source_manifest": str(silver / "metadata/manifest.json"),
               "started_at_utc": utc_now(), "tables": {},
               "meaning": "Planned fixed timetable service as observed in this snapshot; no actual operations or ridership."}
@@ -58,6 +61,27 @@ def build_gold(spark, silver, output, thresholds=None):
         reconciled = daily.agg(F.coalesce(F.sum("scheduled_departures"),F.lit(0)).alias("n")).first().n
         if reconciled != eligible: raise RuntimeError("Gold departures do not reconcile to eligible Silver service dates")
         days = (date.fromisoformat(source["service_to"])-date.fromisoformat(source["service_from"])).days+1
+        coverage = source.get("source_calendar_coverage") or {
+            p: {"from": source["service_from"], "to": source["service_to"]} for p in source["providers"]}
+        providers = spark.createDataFrame([(p, (coverage.get(p) or {}).get("from"),
+                                            (coverage.get(p) or {}).get("to")) for p in source["providers"]],
+                                          "provider string, covered_from string, covered_to string")
+        calendar = spark.range(days).select(F.date_add(F.lit(source["service_from"]).cast("date"),
+                                                       F.col("id").cast("int")).alias("service_date"))
+        network = daily.groupBy("provider", "service_date").agg(
+            F.sum("scheduled_departures").alias("scheduled_departures"),
+            F.countDistinct("line_entity_id").alias("active_lines"),
+            F.min("first_departure_seconds").alias("first_departure_seconds"),
+            F.max("last_departure_seconds").alias("last_departure_seconds"))
+        network = calendar.crossJoin(providers).join(network,["provider","service_date"],"left")
+        network = network.withColumn("is_source_covered", F.coalesce(
+            (F.col("service_date") >= F.to_date("covered_from"))
+            & (F.col("service_date") <= F.to_date("covered_to")),F.lit(False)))
+        for column in ("scheduled_departures","active_lines"):
+            network = network.withColumn(column,F.when(F.col("is_source_covered"),F.coalesce(F.col(column),F.lit(0)))
+                                          .otherwise(F.col(column)))
+        write("daily_network_service",network.drop("covered_from","covered_to")
+              .withColumn("snapshot_date",F.lit(source["snapshot_date"]).cast("date")))
         summary = daily.groupBy(*keys).agg(F.sum("scheduled_departures").alias("scheduled_departures"),
             F.countDistinct("service_date").alias("days_with_service"),
             F.min("first_departure_seconds").alias("earliest_departure_seconds"),

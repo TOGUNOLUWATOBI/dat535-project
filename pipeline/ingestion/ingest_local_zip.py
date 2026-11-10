@@ -55,6 +55,12 @@ def check_archive(path):
 
 
 def verify_previous(manifest_path, identity):
+    from pipeline.storage.zip_bronze import snapshot_xml
+    with snapshot_xml(manifest_path):
+        return _verify_previous(manifest_path, identity)
+
+
+def _verify_previous(manifest_path, identity):
     """A duplicate must point at complete data that is still intact."""
     path = Path(manifest_path)
     previous = json.loads(path.read_text())
@@ -75,7 +81,7 @@ def verify_previous(manifest_path, identity):
     return path
 
 
-def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None):
+def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None, zip_only=False):
     """Preserve, extract and validate one upload; return its saved manifest.
 
     Duplicate identity is (original ZIP SHA-256, requested date, providers).
@@ -167,6 +173,9 @@ def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None):
             completed_at_utc=utc_now(),
         )
         save_json(manifest_path, manifest)
+        if zip_only:
+            from pipeline.storage.zip_bronze import retain_snapshot
+            retain_snapshot(manifest_path, apply=True, document=manifest)
         connection.execute("INSERT INTO manual_imports VALUES (?, ?, ?, ?)", (*identity, str(manifest_path)))
         connection.commit()
         print(f"{manifest['status']}: {manifest_path}", flush=True)
@@ -190,11 +199,12 @@ def main():
     parser.add_argument("--providers", nargs="+", default=["KOL", "AKT"])
     parser.add_argument("--output", type=Path, help="New run directory; existing directories are never overwritten")
     parser.add_argument("--catalog", type=Path, help="Shared SQLite metadata catalog; default: OUTPUT_PARENT/_manual_ingestions.sqlite3")
+    parser.add_argument("--zip-only", action="store_true", help="Retain original upload and selected ZIP, releasing extracted XML")
     args = parser.parse_args()
     name = "manual-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
     output = args.output or Path("data/bronze/entur") / name
     try:
-        ingest_zip(args.source, args.date, output, args.providers, args.catalog)
+        ingest_zip(args.source, args.date, output, args.providers, args.catalog, args.zip_only)
     except Exception as error:
         print(f"Manual ingestion failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 1

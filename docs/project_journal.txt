@@ -881,3 +881,152 @@ filters and missing history. Twenty GUI data, analysis and interaction tests
 passed. The local
 layout preview on port 8502 is labelled synthetic; it is not a new result from
 the school server. This entry records local GUI changes, not a deployment.
+
+
+10 November 2026 - What the 23 exclusions mean, and looking at individual days
+
+The label about trips being left out was confusing. The verified January run
+had 23 valid on-demand occurrences and no invalid ones. A HentMeg availability
+window is not one fixed departure, so these records belong in a separate table.
+We also checked the old local January output: it has 23 rows but incomplete
+type flags. We kept it as it was. The GUI now reads the retained exclusion rows
+for the selected export and separates valid on-demand, invalid and unclassified
+occurrences. It does not copy the verified report's answer onto an older output.
+
+We added Daily service with a month selector, operator and mode filters, daily
+departure and active-line counts, first/last departures and a CSV. Monthly
+sampling is the frequency of our exports, not the granularity of every metric.
+However, our historical Gold currently only expands the 15th to the 21st.
+Those seven days cannot stand for a full month. The new view shows uncovered
+dates as blank, covered dates without service as zero, and the covered-day
+denominator next to the mean.
+
+Scheduled exports can overlap, so each operating date uses one whole export:
+the latest covering plan observed on or before that date. We do not add both
+plans together or fill missing lines from older plans. All 26 GUI tests passed,
+including overlap, future-export, missing-coverage and exclusion cases. No raw
+data or processing window was changed. Full-month coverage remains a separate
+processing step, subject to the source calendars and observation dates.
+
+
+10 November 2026 - Correcting the seven-day limit and actually rebuilding months
+
+The seven-day window was our implementation choice. It was not what we needed:
+we want every calendar date in each month. Changing the GUI alone was not enough.
+We changed the default Silver expansion to the first through the last day of the
+month, including February, and added a provider/date spine in Gold.
+
+There was another catch in the actual XML. Most 15 January frames only declare
+validity from 12 or 13 January. We could not just fill the earlier days with
+zeroes. We downloaded additional early exports and checked their XML, references
+and validity. The 1 and 2 February sources have an unresolved quay reference,
+NSR:Quay:43289. Those failed copies were kept. The validated 14 January export
+does cover February's calendars, so it supplies the early February plan, with
+its original observation date shown in the daily results.
+
+Calendar-support sources do not add observations to our original route-history
+sample. That keeps the verified June-to-July mappings meaningful. They fill
+daily plans where the main export has no valid coverage. One whole export is
+selected per date, independently of operator and mode filters; overlapping
+plans are never added together. Overview, comparisons and line profiles now
+use that same monthly reconstruction, not only the primary export's partial
+counts. Unknown dates remain different from valid zero-service dates.
+
+We rebuilt all nine primary plans and nine support plans locally, into the
+separate data/monthly_2026_01_09 root. All 18 Gold gates passed. Every one of the
+273 January-to-September dates is covered for both providers: 546 provider/date
+pairs and 1,918,707 planned fixed departures in the reconstruction. January is
+31/31 dates, February 28/28. The seven GUI pages also passed against this real
+data, and route history completed with the original nine primary observations.
+All 140 tests passed across the GUI and Spark environments, including the 19
+Spark cases skipped in the GUI environment. We also rechecked the saved file
+inventories for all 54 completed staging, Silver and Gold attempts.
+The counts and audit paths are in docs/monthly_coverage.md.
+
+Old outputs and every raw source were preserved. scripts/rebuild_monthly.sh
+records progress and can reuse compatible completed checkpoints; it also
+refuses to call the rebuild complete if the date coverage audit has gaps.
+This was a local rebuild. The forwarded school-server GUI still needs the
+new code and its own rebuild; we have not used the expired SSH access window.
+
+
+10 November 2026 - Storage again: the XML copies were much bigger than the ZIPs
+
+The server had 4.9 GiB free on a 38 GiB disk. Bronze used 20 GiB, while the 23
+ZIPs together used 1.37 GiB. The large repetition was extracted XML: several
+runs for the same November dates each had about 0.8 GiB of it. Removing just
+national ZIPs was not enough. Compact ZIP copies were also still being kept.
+
+We added a dry-run storage command that checks completed inputs against their
+lineage hashes, then can consolidate identical copies with hardlinks. Every
+path and its raw bytes remain, so references and checkpoint identities still
+work. It skips failed/running snapshots and corrupted files. An explicit option
+can discard compact provider ZIPs after verifying every XML hash and ZIP CRC;
+metadata records XML-only retention so resuming does not demand a removed ZIP.
+Original manual uploads stay protected.
+
+Scheduled and new monthly-support ingestion now keep XML without creating a
+compact ZIP. Successful national downloads are still removed after validation;
+failed downloads remain evidence. The scheduled workflow also consolidates
+verified duplicate storage. This addresses repeated same-source runs, rather
+than assuming each push contains a new dataset.
+
+Both runner services were active: DAT535 and the old Group04 project. The user
+chose Group04 for removal. We must stop/uninstall that exact service and keep
+its _work until unique data is checked. Both observed VS Code server versions
+were also active, so deleting their directories blindly would be wrong.
+The cleanup tool is prepared locally; no server files have been deleted by us.
+
+
+10 November 2026 - Switching Bronze to selected ZIPs
+
+We had focused on deleting ZIP copies, but that was not the right long-term
+choice for this small server. The full-month support downloads finished and
+Bronze grew to 23 GiB. The server had only 3.5 GiB free even after verified
+hardlink consolidation and removing the unused Group04 runner binaries and
+update package. The raw XML, including national stops, was the main cost.
+A larger VM disk was not available, and Drive was not configured.
+
+We decided to keep the selected KOL + AKT XML inside ZIPs and extract one
+snapshot at a time. The new migration builds archives from the files we already
+have, checks member CRCs and SHA-256 against the original lineage, backs up the
+manifest, then removes only the verified expanded copy. Failed sources and
+original manual uploads remain. National re-downloads are not needed.
+
+An isolated copy of the real 15 January snapshot contained 541 XML files,
+820,984,157 uncompressed bytes. Its rebuilt ZIP was 62,842,321 bytes. Restoring
+it preserved all XML hashes, source selection and checkpoint identity; the
+original local dataset was not changed. A real Spark fixture also verified
+ZIP-backed processing, checkpoint reuse, independent XML-to-Gold tracing and
+cleanup after processing. The server format migration has not been run or
+claimed here. Its free-space result must be checked after the user runs it.
+
+
+10 November 2026 - Server ZIP migration and the next memory problem
+
+The user ran the migration on Spark. Its report contains 34 migrated snapshots,
+12 skipped entries and no problems. Free disk space rose from about 3.5 GiB to
+23 GiB, with the root disk at 41 percent used. That confirms compression solved
+the immediate disk pressure; those are the actual server figures, not a local
+estimate. The raw XML bytes remain inside the verified selected ZIPs.
+
+The full-month rebuild then completed 14 of its 22 jobs. The next input, the
+1 April calendar-support export, failed in staging with Java heap exhaustion.
+The later gateway errors were consequences of the JVM crash. The launcher had
+not specified a heap budget and the batch kept every snapshot in one JVM.
+We cannot prove how much was caused by the larger April input versus retained
+state across that long run, so the fix addresses both.
+
+The rebuild now sets a 2 GiB driver heap before JVM startup and runs one Spark
+worker process at a time, with a fresh process for each snapshot and for history.
+The parent saves progress and errors independently of the JVM. Exception text
+and shutdown handling no longer prevent failure recording if the gateway dies.
+The transformation fingerprint inputs are unchanged, so the completed server
+checkpoints can be reused rather than rebuilding those 14 snapshots.
+
+An isolated copy of the real April ZIP passed staging, Silver and Gold with an
+actual 2,147,483,648-byte heap. It contained 34,309 journeys and 1,193,513 passing
+times; Silver recorded no quarantined journeys or passing times. A second worker
+reused all three stages. The parent rebuild also resumed it and passed April's
+full-month coverage audit. Original local datasets were not changed. The resumed
+22-job school-server run still needs to be completed and checked separately.

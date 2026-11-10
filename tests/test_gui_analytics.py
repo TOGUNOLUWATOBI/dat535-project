@@ -86,3 +86,71 @@ class GoldAnalyticsTests(unittest.TestCase):
         self.daily.loc[0, "service_date"] = "2026-01-01"
         with self.assertRaises(ValueError):
             daily_profile(self.daily, self.items[0])
+
+    def test_month_distinguishes_unknown_dates_from_covered_zero_service(self):
+        import pandas as pd
+        from app.analytics import daily_month
+        result = daily_month(self.daily, self.items, "2026-01").set_index("service_date")
+        self.assertEqual(len(result), 31)
+        self.assertEqual(result.covered.sum(), 7)
+        self.assertTrue(pd.isna(result.loc["2026-01-01", "departures"]))
+        self.assertEqual(result.loc["2026-01-18", "departures"], 0)
+        self.assertEqual(result.loc["2026-01-15", "active_lines"], 2)
+        self.assertEqual(result.departures.sum(), 34)
+        water = daily_month(self.daily, self.items, "2026-02", ["AKT"], "water")
+        self.assertEqual(water.covered.sum(), 7)
+        self.assertEqual(water.loc[water.covered, "departures"].sum(), 0)
+
+    def test_overlapping_exports_choose_one_whole_valid_plan_without_old_line_backfill(self):
+        import pandas as pd
+        from app.analytics import daily_month
+        newer = dict(self.items[0], snapshot_date="2026-01-16", service_from="2026-01-16", service_to="2026-01-22")
+        future = dict(newer, snapshot_date="2026-01-25", service_from="2026-01-15", service_to="2026-01-31")
+        future["gold_manifest"]={"providers":["AKT","KOL"],"source_calendar_coverage":{
+            p:{"from":"2026-01-25","to":"2026-01-31"} for p in ("AKT","KOL")}}
+        row = self.daily.iloc[[0]].assign(snapshot_date="2026-01-16", service_date="2026-01-16", scheduled_departures=100)
+        hindsight = row.assign(snapshot_date="2026-01-25", service_date="2026-01-15", scheduled_departures=777)
+        daily = pd.concat([self.daily, row, hindsight], ignore_index=True)
+        result = daily_month(daily, [*self.items, newer, future], "2026-01").set_index("service_date")
+        self.assertEqual(result.loc["2026-01-15", "departures"], 17)
+        self.assertEqual(result.loc["2026-01-16", "departures"], 100)
+        self.assertEqual(result.loc["2026-01-16", "active_lines"], 1)
+        self.assertEqual(result.loc["2026-01-16", "source_export"], "2026-01-16")
+        self.assertFalse(result.loc["2026-01-23", "covered"])
+
+    def test_month_plan_includes_days_before_export_and_the_last_day(self):
+        from app.analytics import daily_month
+        item={**self.items[0],"service_from":"2026-01-01","service_to":"2026-01-31"}
+        result=daily_month(self.daily,[item],"2026-01")
+        self.assertEqual(result.covered.sum(),31)
+        self.assertEqual(result.source_export.iloc[0],"2026-01-15")
+        self.assertEqual(result.source_export.iloc[-1],"2026-01-15")
+
+    def test_monthly_overview_uses_the_same_daily_plans_and_calendar_denominator(self):
+        from app.analytics import monthly_series, daily_month
+        series=monthly_series(self.daily,self.items)
+        for month,expected in [('2026-01',34),('2026-02',55)]:
+            part=series[series.month==month]
+            profile=daily_month(self.daily,self.items,month)
+            self.assertEqual(part.departures.sum(),expected)
+            self.assertEqual(part.departures.sum(),profile.departures.sum())
+            self.assertTrue((part.covered_days==7).all())
+            self.assertAlmostEqual(part.mean_per_day.sum(),expected/7)
+
+    def test_month_with_no_published_coverage_includes_all_leap_month_dates(self):
+        from app.analytics import daily_month
+        result = daily_month(self.daily, self.items, "2028-02")
+        self.assertEqual(len(result), 29)
+        self.assertFalse(result.covered.any())
+        self.assertTrue(result.departures.isna().all())
+
+    def test_exclusions_keep_valid_on_demand_separate_from_invalid_and_unknown(self):
+        import pandas as pd
+        from app.analytics import exclusion_reasons
+        rows = pd.DataFrame({"is_valid": [True, False, False, None, True, False],
+                             "is_flexible": [True, False, True, True, False, None]})
+        result = exclusion_reasons(rows)
+        self.assertEqual(list(result.reason), ["Valid on-demand service", "Invalid service occurrence",
+                                               "Invalid service occurrence", "Not classified", "Not classified", "Not classified"])
+        self.assertNotIn("reason", rows.columns)
+        self.assertEqual(exclusion_reasons(pd.DataFrame({"journey": [1]})).reason.iloc[0], "Not classified")
