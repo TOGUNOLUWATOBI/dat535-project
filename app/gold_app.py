@@ -65,6 +65,11 @@ def load_history(root):
     return h.manifest, tables, h.stop_names()
 
 
+@st.cache_data(ttl=60, show_spinner="Reading exclusion details …")
+def load_exclusions(item):
+    return analytics.exclusion_reasons(data.gold_table([item], "excluded_service_dates"))
+
+
 # --------------------------------------------------------------------------
 # Small helpers
 
@@ -224,6 +229,51 @@ def page_compare(items, daily, history):
               .rename(columns={"before": "Earlier", "after": "Later", "change": "Difference", "change_pct": "Change (%)"}))
     download(result, f"comparison_{before}_{after}_{mode}.csv", "Download full comparison")
     st.caption("Lines are matched by operator and NeTEx ID. Verified renumberings and replacements are shown separately under Replaced lines.")
+
+
+def page_daily(items, daily):
+    st.header("Daily service")
+    intro("Explore planned departures by operating date within a month. These are timetable plans, not actual vehicle movements.")
+    providers, mode = filters("daily")
+    months = pd.period_range(min(i["service_from"] for i in items), max(i["service_to"] for i in items), freq="M")
+    month = st.selectbox("Month", [str(m) for m in months], index=len(months) - 1,
+                         format_func=lambda m: pd.Period(m, freq="M").strftime("%B %Y"), key="daily_month")
+    profile = analytics.daily_month(daily, items, month, providers, mode)
+    known = profile[profile.covered]
+    count = len(known)
+    cols = st.columns(3)
+    metric(cols[0], "Dates with published coverage", f"{count} / {len(profile)}")
+    metric(cols[1], "Departures on covered dates", f"{int(known.departures.sum()):,}" if count else "–")
+    metric(cols[2], "Mean per covered date", f"{known.departures.mean():,.1f}" if count else "–")
+    if count < len(profile):
+        st.info(f"{len(profile) - count} dates have no published coverage. Blank dates are unknown, not zero service. "
+                "Full-month totals are unavailable until the remaining dates are covered.")
+    st.caption("When export windows overlap, each date uses the latest covering export observed on or before that date. "
+               "Whole exports are selected together; missing lines are not filled from older plans.")
+    st.subheader("Departures each day")
+    chart_data = profile.assign(date_label=profile.service_date.map(day),
+                                operating_date=profile.service_date.dt.strftime("%Y-%m-%d"))
+    tooltip = [alt.Tooltip("date_label:N", title="Date"), "weekday:N", "coverage:N",
+               alt.Tooltip("departures:Q", title="Departures"),
+               alt.Tooltip("active_lines:Q", title="Lines with service"),
+               alt.Tooltip("source_export:N", title="Source export")]
+    base = alt.Chart(chart_data).encode(
+        x=alt.X("operating_date:O", sort=None, title="Operating date",
+                axis=alt.Axis(labelExpr="timeFormat(toDate(datum.label), '%d %b')", labelAngle=-45)), tooltip=tooltip)
+    gaps = base.transform_filter("!datum.covered").mark_rect(color="#94a3b8", opacity=.12)
+    bars = base.mark_bar(color="#14b8a6").encode(y=alt.Y("departures:Q", title="Planned departures"))
+    zero = base.transform_filter("datum.covered && datum.departures === 0").mark_tick(
+        color="#14b8a6", thickness=2).encode(y=alt.datum(0))
+    st.altair_chart((gaps + bars + zero).properties(height=280), use_container_width=True)
+    st.caption("Grey bands have no published coverage. Teal ticks mark covered dates with zero departures. "
+               "Uncovered dates have no count.")
+    shown = profile.assign(**{"first departure": profile["first"].map(data.clock),
+                              "last departure": profile["last"].map(data.clock)})
+    shown = shown.drop(columns=["covered", "first", "last"])
+    table(shown, column_config={"service_date": st.column_config.DateColumn("Operating date", format="DD MMM YYYY"),
+                               "departures": "Planned departures", "active_lines": "Lines with service",
+                               "coverage": "Coverage", "source_export": "Source export"})
+    download(shown, f"daily_service_{month}_{mode}.csv")
 
 
 def page_line(items, daily, history):
@@ -462,13 +512,48 @@ def page_checks(items, history):
         gate = m.get("quality_gate") or {}
         rows.append({"Timetable date": day(item["snapshot_date"]),
                      "Result": GATE.get(gate.get("status"), "Not checked (older run)"),
-                     "Trips counted": recon.get("gold_scheduled_departures"),
-                     "Trips left out": recon.get("excluded_service_occurrences"),
+                     "Fixed departures counted": recon.get("gold_scheduled_departures"),
+                     "Outside fixed-service metrics": recon.get("excluded_service_occurrences"),
                      "Totals add up": {True: "✅", False: "❌"}.get(recon.get("counts_match"), "Not recorded")})
     table(pd.DataFrame(rows))
     download(pd.DataFrame(rows), "published_quality.csv")
-    st.caption("Trips left out include valid flexible (on-demand) services and journey occurrences "
-               "that fail validation. Rules are in config/quality_thresholds.json.")
+    st.caption("Outside fixed-service metrics includes valid on-demand services and invalid service occurrences. "
+               "An occurrence means one journey on one operating date, not a whole line or an XML file. "
+               "These records remain in excluded_service_dates.")
+
+    st.subheader("Why service was excluded")
+    dates = [i["snapshot_date"] for i in items]
+    selected = st.selectbox("Export details", dates, index=len(dates) - 1, format_func=day, key="checks_export")
+    item = next(i for i in items if i["snapshot_date"] == selected)
+    if "excluded_service_dates" not in item["gold_manifest"].get("tables", {}):
+        st.info("The reason breakdown was not recorded in this older output.")
+    else:
+        try:
+            excluded = load_exclusions(item)
+        except Exception as error:
+            st.warning(f"Could not read the retained exclusion details: {error}")
+        else:
+            expected = item["gold_manifest"].get("reconciliation", {}).get("excluded_service_occurrences")
+            if expected is not None and len(excluded) != expected:
+                st.warning("The retained exclusion rows do not match the published total. Check this output before using its breakdown.")
+            counts = excluded.reason.value_counts()
+            cols = st.columns(3)
+            metric(cols[0], "Valid on-demand occurrences", int(counts.get("Valid on-demand service", 0)))
+            metric(cols[1], "Invalid occurrences", int(counts.get("Invalid service occurrence", 0)))
+            metric(cols[2], "Unclassified occurrences", int(counts.get("Not classified", 0)))
+            if counts.get("Not classified", 0):
+                st.warning("Some saved occurrences lack a complete classification. This breakdown is incomplete; "
+                           "their reasons need verification from a regenerated output.")
+            st.caption("On-demand service can describe an availability window, such as 10:00–21:00. "
+                       "It is valid service, but cannot be counted as a fixed departure. "
+                       "Invalid occurrences are withheld by the validation rules.")
+            if len(excluded):
+                columns = [c for c in ("provider", "service_date", "line_public_code", "line_entity_id", "reason")
+                           if c in excluded.columns]
+                table(excluded[columns])
+                download(excluded, f"excluded_occurrences_{selected}.csv")
+            else:
+                st.success("No service occurrences were excluded from this export.")
 
     manifest = history[0] if history else {}
     with st.expander("Technical details"):
@@ -482,7 +567,7 @@ def page_checks(items, history):
 
 # --------------------------------------------------------------------------
 
-PAGES = {"Overview": page_overview, "Compare exports": page_compare, "One line": page_line, "What changed": page_changes,
+PAGES = {"Overview": page_overview, "Daily service": page_daily, "Compare exports": page_compare, "One line": page_line, "What changed": page_changes,
          "Replaced lines": page_replaced, "Data checks": page_checks}
 
 
@@ -530,6 +615,8 @@ def main():
 
     if page == "Overview":
         page_overview(items, daily)
+    elif page == "Daily service":
+        page_daily(items, daily)
     elif page == "Compare exports":
         page_compare(items, daily, history)
     elif page == "One line":

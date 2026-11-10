@@ -881,3 +881,29 @@ filters and missing history. Twenty GUI data, analysis and interaction tests
 passed. The local
 layout preview on port 8502 is labelled synthetic; it is not a new result from
 the school server. This entry records local GUI changes, not a deployment.
+
+
+10 November 2026 - What the 23 exclusions mean, and looking at individual days
+
+The label about trips being left out was confusing. The verified January run
+had 23 valid on-demand occurrences and no invalid ones. A HentMeg availability
+window is not one fixed departure, so these records belong in a separate table.
+We also checked the old local January output: it has 23 rows but incomplete
+type flags. We kept it as it was. The GUI now reads the retained exclusion rows
+for the selected export and separates valid on-demand, invalid and unclassified
+occurrences. It does not copy the verified report's answer onto an older output.
+
+We added Daily service with a month selector, operator and mode filters, daily
+departure and active-line counts, first/last departures and a CSV. Monthly
+sampling is the frequency of our exports, not the granularity of every metric.
+However, our historical Gold currently only expands the 15th to the 21st.
+Those seven days cannot stand for a full month. The new view shows uncovered
+dates as blank, covered dates without service as zero, and the covered-day
+denominator next to the mean.
+
+Scheduled exports can overlap, so each operating date uses one whole export:
+the latest covering plan observed on or before that date. We do not add both
+plans together or fill missing lines from older plans. All 26 GUI tests passed,
+including overlap, future-export, missing-coverage and exclusion cases. No raw
+data or processing window was changed. Full-month coverage remains a separate
+processing step, subject to the source calendars and observation dates.

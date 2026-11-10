@@ -95,3 +95,48 @@ def weekday_comparison(daily, items, before, after, providers=None, mode="all"):
         grouped = profile.groupby("weekday").departures.mean().reindex(WEEKDAYS)
         frames.append(grouped.rename("departures").reset_index().assign(snapshot_date=snapshot))
     return pd.concat(frames, ignore_index=True)
+
+
+def daily_month(daily, items, month, providers=None, mode="all"):
+    """Calendar dates with one whole export per covered day, never a future export.
+
+    Overlapping windows use the latest covering export observed on/before that
+    date. Missing lines in that export are not backfilled from older plans.
+    Unprocessed dates remain null; covered dates without service are zero.
+    """
+    period = pd.Period(month, freq="M")
+    calendar = pd.DataFrame({"service_date": pd.date_range(period.start_time, period.end_time)})
+    sources = []
+    for operating_day in calendar.service_date.dt.strftime("%Y-%m-%d"):
+        candidates = [i["snapshot_date"] for i in items
+                      if i["service_from"] <= operating_day <= i["service_to"]
+                      and i["snapshot_date"] <= operating_day]
+        sources.append(max(candidates) if candidates else None)
+    calendar["source_export"] = sources
+    calendar["covered"] = calendar.source_export.notna()
+    selected = select_service(daily, providers, mode)
+    selected["service_date"] = pd.to_datetime(selected.service_date)
+    # Join the chosen export first: adding all snapshots would count overlap twice.
+    chosen = selected.merge(calendar, left_on=["service_date", "snapshot_date"],
+                            right_on=["service_date", "source_export"], how="inner")
+    chosen["_line"] = list(zip(chosen.provider, chosen.line_entity_id))
+    totals = chosen.groupby("service_date").agg(
+        departures=("scheduled_departures", "sum"), active_lines=("_line", "nunique"),
+        first=("first_departure_seconds", "min"), last=("last_departure_seconds", "max"))
+    result = calendar.join(totals, on="service_date")
+    for name in ("departures", "active_lines"):
+        result[name] = result[name].fillna(0).where(result.covered).astype("Int64")
+    result["weekday"] = result.service_date.dt.day_name()
+    result["coverage"] = result.covered.map({True: "Published window", False: "Not covered"})
+    return result
+
+
+def exclusion_reasons(frame):
+    """Label each retained occurrence; unknown flags never become valid/invalid guesses."""
+    result = frame.copy()
+    result["reason"] = "Not classified"
+    if {"is_valid", "is_flexible"}.issubset(result.columns):
+        known_type = result.is_flexible.isin([True, False])
+        result.loc[result.is_valid.eq(False) & known_type, "reason"] = "Invalid service occurrence"
+        result.loc[result.is_valid.eq(True) & result.is_flexible.eq(True), "reason"] = "Valid on-demand service"
+    return result

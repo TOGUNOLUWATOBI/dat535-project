@@ -64,6 +64,37 @@ class GuiInteractionTests(unittest.TestCase):
         self.assertFalse(app.exception)
         self.assertTrue(any("Route history is not available" in info.value for info in app.info))
 
+    def test_daily_view_shows_partial_month_coverage_and_zero_service_filters(self):
+        app = self.run_app(self.items, self.daily)
+        app.sidebar.radio[0].set_value("Daily service").run()
+        values = self.metrics(app)
+        self.assertEqual(values["Dates with published coverage"], "7 / 28")
+        self.assertEqual(values["Departures on covered dates"], "55")
+        self.assertTrue(any("21 dates have no published coverage" in info.value for info in app.info))
+        app.selectbox(key="daily_operator").set_value("AKT").run()
+        app.selectbox(key="daily_mode").set_value("Boat").run()
+        self.assertEqual(self.metrics(app)["Departures on covered dates"], "0")
+        self.assertEqual(self.metrics(app)["Dates with published coverage"], "7 / 28")
+        app.selectbox(key="daily_month").set_value("2026-01").run()
+        self.assertEqual(self.metrics(app)["Dates with published coverage"], "7 / 31")
+        self.assertEqual(self.metrics(app)["Departures on covered dates"], "5")
+
+    def test_exclusion_details_separate_on_demand_from_invalid(self):
+        import pandas as pd
+        from app import data
+        self.items[-1]["gold_manifest"].update(
+            tables={"excluded_service_dates": {"path": "excluded_service_dates"}},
+            reconciliation={"excluded_service_occurrences": 23, "counts_match": True})
+        app = self.run_app(self.items, self.daily)
+        excluded = pd.DataFrame({"provider": ["KOL"] * 23, "is_valid": [True] * 23,
+                                 "is_flexible": [True] * 23})
+        with patch.object(data, "gold_table", return_value=excluded):
+            app.sidebar.radio[0].set_value("Data checks").run()
+        values = self.metrics(app)
+        self.assertEqual(values["Valid on-demand occurrences"], "23")
+        self.assertEqual(values["Invalid occurrences"], "0")
+        self.assertEqual(values["Unclassified occurrences"], "0")
+
 
 if __name__ == "__main__":
     unittest.main()
