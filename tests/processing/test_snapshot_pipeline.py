@@ -2,6 +2,7 @@ from datetime import date
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -11,7 +12,7 @@ from pipeline.ingestion.download_entur_netex import file_checksums
 from pipeline.ingestion.generate_provider_dataset import validate_snapshot
 
 
-def complete_fixture(root,bad_time=False):
+def complete_fixture(root,bad_time=False,bad_calendar=False):
     xml=root/'xml/2026-01-15';xml.mkdir(parents=True);metadata=root/'metadata';metadata.mkdir()
     def publication(body):return '<PublicationDelivery xmlns="http://www.netex.org.uk/netex" version="1.15:NO-NeTEx-networktimetable:1.5"><PublicationTimestamp>2026-01-15T00:00:00</PublicationTimestamp><dataObjects>'+body+'</dataObjects></PublicationDelivery>'
     for provider,number,flexible in [('KOL','007',False),('AKT','007',False),('AKT','008',False),('KOL','HentMeg',True)]:
@@ -37,6 +38,8 @@ def complete_fixture(root,bad_time=False):
 <DayTypeAssignment id="{p}:DayTypeAssignment:2" version="1"><Date>2026-01-16</Date><DayTypeRef ref="{p}:DayType:1"/><isAvailable>false</isAvailable></DayTypeAssignment>
 <DayTypeAssignment id="{p}:DayTypeAssignment:3" version="1"><Date>2026-01-17</Date><DayTypeRef ref="{p}:DayType:1"/></DayTypeAssignment>
 </dayTypeAssignments></ServiceCalendarFrame></frames></CompositeFrame>'''
+        if bad_calendar and p=='AKT':
+            body=body.replace('</DaysOfWeek>','</DaysOfWeek><HolidayTypes>PublicHoliday</HolidayTypes>')
         (xml/f'_{p}_shared_data.xml').write_text(publication(body))
     (xml/'_stops.xml').write_text(publication('<SiteFrame id="NSR:SiteFrame:1" version="1"><stopPlaces><StopPlace id="NSR:StopPlace:1" version="1"><Name>Test station</Name><quays><Quay id="NSR:Quay:1" version="1"><Name>First</Name></Quay><Quay id="NSR:Quay:2" version="1"/></quays></StopPlace></stopPlaces></SiteFrame>'))
     lineage=[]
@@ -90,6 +93,54 @@ class SnapshotPipelineTests(unittest.TestCase):
         profile=json.loads((gold/'metadata/quality_profile.json').read_text())
         self.assertEqual(profile['service']['KOL']['excluded_flexible'],5)
         self.assertEqual(profile['times']['AKT']['overnight_passing_times'],2)
+        self.assertEqual(profile['expected_providers'],['AKT','KOL'])
+        self.assertEqual(profile['observed_providers'],['AKT','KOL'])
+        # Source checks use XML for references, flexible windows and whole-line counts.
+        from pipeline.quality.trace import SourceContext, trace
+        staging=Path(result['staging']['path'])
+        context=SourceContext(json.loads((staging/'metadata/manifest.json').read_text()))
+        selected={r.source_member:r.journey_key for r in journeys.collect()}
+        for member in ('AKT_007.xml','KOL_HentMeg.xml'):
+            checked=trace(self.spark,silver,gold,staging,selected[member],member,context)
+            self.assertTrue(checked['ok'],checked['checks'])
+            self.assertTrue(checked['checks']['physical_stops_match'])
+            self.assertTrue(checked['checks']['flexible_windows_match'])
+            self.assertTrue(checked['checks']['source_line_departures_match_gold'])
+
+        # Corrupt another journey's date consistently in both Silver and Gold.
+        # The selected journey still matches XML, and Silver/Gold still agree.
+        # Only the independent whole-line XML recount exposes the error.
+        from pyspark.sql import functions as F
+        wrong_silver=self.root/'wrong-silver';wrong_gold=self.root/'wrong-gold'
+        shutil.copytree(silver,wrong_silver);shutil.copytree(gold,wrong_gold)
+        changed=dates.withColumn('service_date',F.when(
+            (F.col('journey_key')==selected['AKT_008.xml']) & (F.col('service_date')==F.lit(date(2026,1,15))),
+            F.lit(date(2026,1,16))).otherwise(F.col('service_date')))
+        changed.write.mode('overwrite').parquet(str(wrong_silver/'journey_service_dates'))
+        daily=self.spark.read.parquet(str(gold/'daily_line_service'))
+        changed_daily=daily.withColumn('service_date',F.when(
+            (F.col('provider')=='AKT') & (F.col('line_public_code')=='008')
+            & (F.col('service_date')==F.lit(date(2026,1,15))),F.lit(date(2026,1,16)))
+            .otherwise(F.col('service_date')))
+        changed_daily.write.mode('overwrite').parquet(str(wrong_gold/'daily_line_service'))
+        checked=trace(self.spark,wrong_silver,wrong_gold,staging,selected['AKT_007.xml'],'corruption',context)
+        self.assertTrue(checked['checks']['operating_dates_match'])
+        self.assertTrue(checked['checks']['gold_counts_journey'])
+        self.assertFalse(checked['checks']['source_line_departures_match_gold'])
+        self.assertFalse(checked['ok'])
+        # A provider promised by the manifest must not disappear merely because
+        # every observed provider has clean, internally reconciled data.
+        from pipeline.processing.gold.build import build_gold
+        missing_manifest=wrong_silver/'metadata/manifest.json'
+        missing_data=json.loads(missing_manifest.read_text())
+        missing_data['providers'].append('MISSING')
+        missing_manifest.write_text(json.dumps(missing_data))
+        blocked=self.root/'missing-provider-gold'
+        with self.assertRaisesRegex(RuntimeError,'missing_expected_provider'):
+            build_gold(self.spark,wrong_silver,blocked)
+        blocked_report=json.loads((blocked/'metadata/manifest.json').read_text())
+        self.assertEqual(blocked_report['tables'],{})
+        self.assertEqual(blocked_report['status'],'failed')
         repeat=run_snapshot(self.spark,manifest,None,self.root/'data')
         self.assertTrue(all(stage['reused'] for stage in repeat.values()))
         self.assertEqual(result['gold']['path'],repeat['gold']['path'])
@@ -118,6 +169,23 @@ class SnapshotPipelineTests(unittest.TestCase):
         self.assertEqual(gold_manifest['quality_gate']['status'],'warn')
         self.assertEqual(gold_manifest['reconciliation']['gold_scheduled_departures'],5)
         self.assertEqual(gold_manifest['reconciliation']['excluded_service_occurrences'],15)
+
+    def test_calendar_loss_is_measured_before_dates_disappear(self):
+        from pipeline.run_snapshot import run_snapshot
+        from pipeline.quality.silver_profile import evaluate, profile_silver
+        manifest=complete_fixture(self.root/'bronze',bad_calendar=True)
+        result=run_snapshot(self.spark,manifest,None,self.root/'data',through='silver')
+        profile=profile_silver(self.spark,Path(result['silver']['path']))
+        self.assertEqual(profile['calendar_impact']['AKT']['affected_journeys'],2)
+        self.assertEqual(profile['service']['AKT']['service_occurrences'],0)
+        # Even a deliberate override of the broad quarantine/zero-service rules
+        # cannot conceal the affected journeys behind an empty expanded table.
+        gate=evaluate(profile,{'journey_quarantine_rate':{'warn':0,'fail':1.0},
+                               'eligible_service_occurrences_min':{'fail_below':0}})
+        self.assertEqual(gate['metrics']['AKT']['calendar_affected_journey_rate'],1.0)
+        self.assertEqual(gate['status'],'fail')
+        self.assertIn('calendar_affected_journey_rate',
+                      {f['rule'] for f in gate['findings'] if f['level']=='fail'})
 
     def test_ambiguous_unversioned_references_do_not_multiply_source_rows(self):
         from pipeline.processing.silver.build import lookup

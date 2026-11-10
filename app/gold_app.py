@@ -22,14 +22,14 @@ WHAT_HAPPENED = {
     "discontinued_verified": "Stopped (confirmed)",
     "not_observed": "Gone from the timetable (reason unknown)",
     "replacement_verified": "Replaces an old line (confirmed)",
-    "first_observed": "New line",
+    "first_observed": "Appeared in this export",
 }
 CHANGE = {
-    "line_appeared": "Line added", "line_disappeared": "Line removed",
+    "line_appeared": "Appeared in export", "line_disappeared": "Missing from export",
     "public_code_changed": "Line number changed", "name_changed": "Name changed",
     "transport_mode_changed": "Bus/boat changed", "stops_added": "Stops added", "stops_removed": "Stops removed",
-    "patterns_changed": "Stop order changed", "service_started": "Trips started",
-    "service_stopped": "No trips this week", "departures_increased": "More trips",
+    "patterns_changed": "Stop order changed", "service_started": "Trips appear in the window",
+    "service_stopped": "No trips in this window", "departures_increased": "More trips",
     "departures_decreased": "Fewer trips", "first_departure_changed": "First trip moved",
     "last_departure_changed": "Last trip moved",
 }
@@ -98,8 +98,8 @@ def table(frame, **kwargs):
 
 def page_overview(items, overview):
     st.header("Overview")
-    intro("How many trips the operators planned, month by month. Each point is one monthly timetable, "
-          "counting the planned trips in the week after it was published.")
+    intro("Compare planned trips across timetable exports. Each point counts departures in the "
+          "seven-day window starting on the export date.")
 
     latest = overview[overview.snapshot == overview.snapshot.max()]
     cols = st.columns(len(latest) + 1)
@@ -132,8 +132,7 @@ def page_overview(items, overview):
 
 def page_line(daily, history):
     st.header("One line")
-    intro("Pick a bus or boat line to see how many trips it had each month, "
-          "and what changed in its route.")
+    intro("Pick a bus or boat line to compare its planned trips and published route across exports.")
     _, tables, stop_names = history
     catalog = tables["catalog"]
     names = line_labels(catalog)
@@ -153,7 +152,7 @@ def page_line(daily, history):
     mine = snaps[snaps.line_id == line_id].sort_values("snapshot_date")
     left, right = st.columns(2)
     with left:
-        st.subheader("Trips per week, each month")
+        st.subheader("Trips per week, each export")
         st.altair_chart(alt.Chart(mine.assign(date=mine.snapshot_date.map(short_day))).mark_bar().encode(
             x=alt.X("date:N", sort=None, title="Timetable date (2026)", axis=DATE_AXIS),
             y=alt.Y("window_departures:Q", title="Planned trips per week"),
@@ -178,16 +177,17 @@ def page_line(daily, history):
             st.write("This line has no planned trips in any of the timetables.")
 
     st.subheader("Route versions")
-    st.caption("A new version starts each time the line's route or stops change.")
+    st.caption("Versions track the line across published exports. Dates show when each version was "
+               "first and last seen; operating dates may differ.")
     v = tables["line_versions"]
     v = v[v.line_id == line_id].sort_values("version_number")
     table(pd.DataFrame({
         "Version": v.version_number, "Number": v.public_code, "Route": v["name"],
-        "From": v.first_observed.map(day), "Until": v.last_observed.map(day),
+        "First seen": v.first_observed.map(day), "Last seen": v.last_observed.map(day),
         "Why": v.version_reason.map(WHY_NEW_VERSION), "Stops": v.stop_count,
         "Replaces": v.renumbered_from_line_id.map(lambda x: label_list(x, names))}))
 
-    st.subheader("What changed, month by month")
+    st.subheader("Changes between exports")
     ch = tables["line_changes"]
     ch = ch[ch.line_id == line_id].sort_values(["from_snapshot", "change_type"])
 
@@ -216,8 +216,8 @@ def page_line(daily, history):
 
 def page_changes(history):
     st.header("What changed")
-    intro("Compare two monthly timetables side by side: which lines were added or removed, "
-          "and which lines got more or fewer trips.")
+    intro("Compare two exports: which lines appeared or are no longer published, "
+          "and which have more or fewer planned trips in their weekly windows.")
     _, tables, _ = history
     names = line_labels(tables["catalog"])
     renumberings, discontinuations = data.evidence()
@@ -234,18 +234,18 @@ def page_changes(history):
 
     cols = st.columns(4)
     cols[0].metric("Lines", int(row.lines_after), int(row.lines_after - row.lines_before))
-    cols[1].metric("Lines added / removed", f"+{row.lines_appeared} / −{row.lines_disappeared}")
+    cols[1].metric("Lines appeared / disappeared", f"+{row.lines_appeared} / −{row.lines_disappeared}")
     cols[2].metric("Trips per week", f"{row.window_departures_after:,}",
                    int(row.window_departures_after - row.window_departures_before))
     cols[3].metric("Stops gained / lost", f"+{row.stops_gained_window_service} / −{row.stops_lost_window_service}",
-                   help="Stops that got or lost all their trips in the week counted.")
+                   help="Stops with planned trips in only one of the two selected weekly windows.")
 
     t = tables["line_transitions"]
     t = t[(t.from_snapshot == start) & (t.provider == provider)]
 
     gone = t[t.status == "disappeared"]
     if len(gone):
-        st.subheader("Lines removed")
+        st.subheader("Lines no longer published")
         confirmed = gone.interpretation.isin(["renumbered_verified", "discontinued_verified"]).sum()
         st.caption(f"{confirmed} of {len(gone)} confirmed by the operator. Click a link to read the notice.")
         replaced = renumberings[renumberings.to_snapshot == end].groupby("old_line_id").new_line_id \
@@ -262,8 +262,8 @@ def page_changes(history):
 
     new = t[t.status == "appeared"]
     if len(new):
-        st.subheader("Lines added")
-        st.caption("A new line often appears one month before it starts running, so it can show 0 trips.")
+        st.subheader("Lines newly present in the export")
+        st.caption("A line can be published before its planned service starts, so it can show 0 trips in this window.")
         table(pd.DataFrame({
             "Number": new.public_code_after, "Route": new.name_after,
             "Trips per week": new.departures_after.astype("Int64"),
@@ -272,7 +272,7 @@ def page_changes(history):
     both = t[(t.departures_before > 0) & (t.departures_after > 0)].copy()
     if len(both):
         st.subheader("Biggest changes in trips")
-        st.caption("Lines that ran in both timetables. Red = fewer trips, blue = more trips.")
+        st.caption("Lines with planned trips in both selected windows. Red = fewer trips, blue = more trips.")
         both["change"] = both.departure_change
         both["line"] = (both.public_code_after + " " + both.name_after.fillna("")).str.strip()
         top = pd.concat([both.nsmallest(8, "change"), both.nlargest(8, "change")]).drop_duplicates("line_id")
@@ -286,9 +286,9 @@ def page_changes(history):
     stops = tables["stop_coverage_changes"]
     lost = stops[(stops.from_snapshot == start) & (stops.provider == provider) & (stops.measure == "window_service")
                  & (stops.change_type == "stop_lost")]
-    with st.expander(f"Stops that lost all their trips ({len(lost)})"):
+    with st.expander(f"Stops with no planned trips in the later window ({len(lost)})"):
         table(pd.DataFrame({"Stop": lost.stop_name,
-                            "Lines that used to stop here": lost.line_codes_before.map(lambda c: ", ".join(c))}))
+                            "Lines serving the earlier window": lost.line_codes_before.map(lambda c: ", ".join(c))}))
 
 
 def page_replaced(history):
@@ -333,13 +333,13 @@ def page_replaced(history):
         c2.metric(f"New: {new.public_code} {new['name']}", f"{new.window_departures} trips/week",
                   int(new.window_departures - old.window_departures))
         st.markdown(f"**Stops on both lines:** {len(old_stops & new_stops)}")
-        st.markdown(f"**Stops dropped ({len(old_stops - new_stops)}):** "
+        st.markdown(f"**Stops only in the old route definition ({len(old_stops - new_stops)}):** "
                     f"{stop_list(sorted(old_stops - new_stops), stop_names) or 'none'}")
-        st.markdown(f"**New stops ({len(new_stops - old_stops)}):** "
+        st.markdown(f"**Stops only in the new route definition ({len(new_stops - old_stops)}):** "
                     f"{stop_list(sorted(new_stops - old_stops), stop_names) or 'none'}")
 
     if len(discontinuations):
-        with st.expander("Lines that were stopped (no replacement)"):
+        with st.expander("Confirmed discontinued lines"):
             table(pd.DataFrame({
                 "Operator": discontinuations.provider.map(PROVIDERS), "Line": discontinuations.line_id.map(short),
                 "Last seen": discontinuations.from_snapshot.map(day), "Note": discontinuations.note,
@@ -349,8 +349,7 @@ def page_replaced(history):
 
 def page_checks(items, history):
     st.header("Data checks")
-    intro("Before a timetable is shown here, it is checked automatically. "
-          "If too many records are broken, it is not published.")
+    intro("New results are checked before publication. Older results may predate the quality gate.")
     rows = []
     for item in items:
         m = item["gold_manifest"]
@@ -362,8 +361,8 @@ def page_checks(items, history):
                      "Trips left out": recon.get("excluded_service_occurrences"),
                      "Totals add up": "✅" if recon.get("counts_match") else "❌"})
     table(pd.DataFrame(rows))
-    st.caption("Trips are left out only when their dates or times could not be read. "
-               "Rules are in config/quality_thresholds.json.")
+    st.caption("Trips left out include valid flexible (on-demand) services and journey occurrences "
+               "that fail validation. Rules are in config/quality_thresholds.json.")
 
     manifest, _, _ = history
     with st.expander("Technical details"):
@@ -387,11 +386,13 @@ def main():
     page = st.sidebar.radio("Go to", list(PAGES), label_visibility="collapsed")
     with st.sidebar.expander("How to read this"):
         st.markdown(
-            "- **Timetable**: the published timetable, downloaded on the 15th of each month.\n"
-            "- **Trips**: planned departures in the week after that date. These are plans, "
+            "- **Timetable**: an export of published plans. Historical exports are sampled on the 15th, "
+            "January–September 2026; later exports come from scheduled ingestion.\n"
+            "- **Trips**: planned departures in the seven-day window starting on the export date. These are plans, "
             "not buses that actually ran.\n"
             "- **Confirmed**: the operator announced the change on its website.\n"
-            "- A change between two months happened somewhere in between; the exact day is not known.")
+            "- A difference between exports shows a change in the published plans. "
+            "When it took effect for passengers needs confirmation from an operator source.")
     if st.sidebar.button("Reload data"):
         st.cache_data.clear()
 

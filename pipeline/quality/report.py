@@ -30,6 +30,8 @@ ROWS = [
     ("Invalid / inverted / non-monotonic times", lambda p: p["bad_times"]),
     ("Overnight passing times kept with day offset", lambda p: f"{p['t'].get('overnight_passing_times', 0):,}"),
     ("Calendar issues", lambda p: p["g"]["calendar_issues"]),
+    ("Journeys affected by unresolved calendars", lambda p: f"{p['g']['calendar_affected_journey_rate']:.2%}"),
+    ("Staging/Silver occurrence-count mismatches", lambda p: p["g"]["source_occurrence_count_mismatches"]),
     ("Essential fields missing", lambda p: p["essential"]),
     ("Optional fields missing (stop name / route direction)",
      lambda p: f"{p['m'].get('optional_stop_name', 0):,} / {p['m'].get('optional_route_direction', 0):,}"),

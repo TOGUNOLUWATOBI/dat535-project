@@ -799,3 +799,30 @@ Python standard library only, to Silver and Gold: an ordinary journey, an
 overnight journey, a journey whose calendar marks Friday 20 February as not
 available, and a flexible journey. Passing times, operating dates and Gold's
 treatment matched in every case (docs/quality_traces.md, docs/data_quality.md).
+
+
+10 November 2026 - Provider completeness and independent source checks
+
+We worked on two gaps from the review. The quality gate used to discover its
+providers from whatever rows were left, so an empty profile could pass. It now
+compares the manifest selection with the providers in Silver and checks the
+staging/Silver occurrence counts for each provider. Missing providers cannot be
+allowed through by relaxing the zero-service rule. Calendar impact is counted
+from journeys before dates are expanded, since broken calendars can otherwise
+leave no rows to count.
+
+The traces now follow the stop references in the XML all the way to a quay and
+national stop place, or a flexible stop place. They also compare the earliest
+and latest flexible times separately. We added a whole-line recount from every
+original journey occurrence, including repeated IDs in different XML files.
+The useful failure test moves another journey's date in both Silver and Gold:
+they still agree with each other, but the XML recount catches the mistake.
+
+The older local January Parquet did not have the current flexible fields. We
+left it alone and regenerated January into temporary storage from the raw XML.
+The full run passed gate version 2: 25,289 journeys, 768,701 passing times,
+53,322 fixed departures and 23 flexible occurrences excluded. All four real
+trace cases passed, including physical stops, calendar exceptions and flexible
+windows. The temporary processing files were removed afterwards; only the
+small evidence reports were kept. This is local verification, not a server
+deployment or a new verification of the other nine snapshots.

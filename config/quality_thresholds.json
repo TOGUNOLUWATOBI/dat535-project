@@ -9,6 +9,8 @@
     "essential_missing_rate": {"warn": 0.0, "fail": 0.01},
     "conflicting_definitions": {"warn": 0, "fail": null},
     "calendar_issues": {"warn": 0, "fail": null},
+    "calendar_affected_journey_rate": {"warn": 0.0, "fail": 0.01},
+    "source_occurrence_count_mismatches": {"warn": null, "fail": 0},
     "eligible_service_occurrences_min": {"fail_below": 1}
   }
 }

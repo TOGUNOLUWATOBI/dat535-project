@@ -7,8 +7,10 @@ from pipeline.quality.silver_profile import DEFAULT_THRESHOLDS, evaluate, read_t
 
 
 def profile(journeys=100, quarantined=0, ambiguous=0, eligible=50, calendar=None, essential_missing=0):
-    return {"providers": ["AKT"],
-            "volumes": {"AKT": {"journeys_silver": journeys, "journeys_quarantined": quarantined,
+    return {"providers": ["AKT"], "expected_providers": ["AKT"], "observed_providers": ["AKT"],
+            "volumes": {"AKT": {"lines_staging": 10, "lines_silver": 10,
+                                "journeys_staging": journeys, "passing_times_staging": 1000,
+                                "journeys_silver": journeys, "journeys_quarantined": quarantined,
                                 "passing_times_silver": 1000, "passing_times_quarantined": 0}},
             "service": {"AKT": {"service_occurrences": eligible, "eligible_fixed": eligible, "rejected_invalid": 0}},
             "missing": {"AKT": {"lines": 10, "essential_physical_stop": essential_missing, "optional_stop_name": 999}},
@@ -37,6 +39,40 @@ class QualityGateTests(unittest.TestCase):
 
     def test_calendar_issues_warn(self):
         self.assertEqual(evaluate(profile(calendar={"unsupported_rule": 2}))["status"], "warn")
+
+    def test_empty_or_missing_selection_cannot_pass(self):
+        empty = profile()
+        empty.update(providers=[], expected_providers=[], observed_providers=[])
+        self.assertEqual(evaluate(empty)["status"], "fail")
+        del empty["expected_providers"]
+        self.assertEqual(evaluate(empty)["status"], "fail")
+
+    def test_missing_provider_fails_even_if_empty_windows_are_allowed(self):
+        sample = profile()
+        sample["expected_providers"] = ["AKT", "KOL"]
+        result = evaluate(sample, {"eligible_service_occurrences_min": {"fail_below": 0}})
+        self.assertEqual(result["status"], "fail")
+        self.assertIn(("KOL", "missing_expected_provider"),
+                      {(f["provider"], f["rule"]) for f in result["findings"]})
+        sample.update(providers=["AKT", "KOL"], observed_providers=[])
+        self.assertEqual(evaluate(sample)["status"], "fail")
+
+    def test_unexpected_provider_fails(self):
+        sample = profile()
+        sample["observed_providers"].append("OTHER")
+        self.assertEqual(evaluate(sample)["findings"][0]["rule"], "unexpected_provider")
+
+    def test_source_rows_cannot_disappear_even_when_service_counts_reconcile(self):
+        sample = profile()
+        sample["volumes"]["AKT"]["journeys_staging"] += 1
+        self.assertEqual(evaluate(sample)["status"], "fail")
+
+    def test_calendar_impact_uses_journeys_before_date_expansion(self):
+        sample = profile(calendar={"unsupported_rule": 1})
+        sample["calendar_impact"] = {"AKT": {"affected_journeys": 2}}
+        result = evaluate(sample)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["metrics"]["AKT"]["calendar_affected_journey_rate"], 0.02)
 
     def test_threshold_file_is_validated(self):
         with tempfile.TemporaryDirectory() as temp:

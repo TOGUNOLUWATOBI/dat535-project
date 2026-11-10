@@ -24,7 +24,7 @@ to publish on ``fail``.
 import json
 from pathlib import Path
 
-GATE_VERSION = 1
+GATE_VERSION = 2
 # Default publication rules. A rule fires when the metric is above the limit.
 # Rates are fractions of the relevant total; counts are absolute.
 DEFAULT_THRESHOLDS = {
@@ -36,6 +36,8 @@ DEFAULT_THRESHOLDS = {
     "essential_missing_rate": {"warn": 0.0, "fail": 0.01},
     "conflicting_definitions": {"warn": 0, "fail": None},
     "calendar_issues": {"warn": 0, "fail": None},
+    "calendar_affected_journey_rate": {"warn": 0.0, "fail": 0.01},
+    "source_occurrence_count_mismatches": {"warn": None, "fail": 0},
     "eligible_service_occurrences_min": {"fail_below": 1},
 }
 CANONICAL = ("scheduled_stop_points", "stop_assignments", "quays", "flexible_stop_places")
@@ -164,19 +166,50 @@ def profile_silver(spark, silver):
         for r in explode(frame):
             reasons.setdefault(r["provider"], {}).setdefault(kind, {})[r["reason"]] = r["count"]
 
-    providers = sorted(set(volumes) | set(service))
+    # The selection is a contract, not a list inferred from whichever rows survived.
+    expected = manifest.get("providers")
+    if (not isinstance(expected, list) or not expected
+            or any(not isinstance(p, str) or not p.strip() for p in expected)
+            or len(set(expected)) != len(expected)):
+        raise ValueError("Silver manifest must declare a nonempty, unique provider selection")
+    observed = sorted(p for p, v in volumes.items()
+                      if any(v.get(name, 0) for name in
+                             ("lines_silver", "journeys_silver", "passing_times_silver")))
+    for provider in expected:
+        v = volumes.setdefault(provider, {})
+        for name in ("lines_staging", "lines_silver", "journeys_staging", "journeys_silver",
+                     "journeys_accepted", "journeys_quarantined", "journeys_flexible",
+                     "passing_times_staging", "passing_times_silver", "passing_times_accepted",
+                     "passing_times_quarantined"):
+            v.setdefault(name, 0)
+        s = service.setdefault(provider, {})
+        for name in ("service_occurrences", "eligible_fixed", "excluded_flexible", "rejected_invalid",
+                     "valid_fixed_journeys", "valid_fixed_journeys_not_in_window"):
+            s.setdefault(name, 0)
+    affected = (table("journey_day_types").where(~F.coalesce("calendar_resolved", F.lit(False)))
+                .select("provider", "journey_key")
+                .unionByName(journeys.where(F.array_contains("reason_codes", "unresolved_calendar"))
+                             .select("provider", "journey_key")).distinct())
+    calendar_impact = _by_provider(affected, affected_journeys=F.count("*"))
+    providers = sorted(set(expected) | set(observed))
     return {"gate_version": GATE_VERSION, "snapshot_date": manifest["snapshot_date"],
             "service_from": manifest["service_from"], "service_to": manifest["service_to"],
             "silver": str(silver), "providers": providers,
+            "expected_providers": sorted(expected), "observed_providers": observed,
             "volumes": volumes, "duplicates": duplicates, "missing": missing, "references": references,
-            "times": times_profile, "calendar": calendar, "service": service, "reasons": reasons}
+            "times": times_profile, "calendar": calendar, "calendar_impact": calendar_impact,
+            "service": service, "reasons": reasons}
 
 
 def gate_metrics(profile):
     """Reduce a profile to the per-provider numbers the publication rules use."""
     metrics = {}
     conflicts = sum(profile["duplicates"].get("_all", {}).values())
-    for provider in profile["providers"]:
+    providers = set(profile.get("providers", []))
+    for key in ("expected_providers", "observed_providers"):
+        if isinstance(profile.get(key), list):
+            providers.update(p for p in profile[key] if isinstance(p, str))
+    for provider in sorted(providers):
         v = profile["volumes"].get(provider, {})
         s = profile["service"].get(provider, {})
         m = profile["missing"].get(provider, {})
@@ -194,6 +227,13 @@ def gate_metrics(profile):
             "essential_missing_rate": rate(essential, essential_base),
             "conflicting_definitions": conflicts,
             "calendar_issues": sum(profile["calendar"].get(provider, {}).values()),
+            "calendar_affected_journey_rate": rate(
+                profile.get("calendar_impact", {}).get(provider, {}).get("affected_journeys", 0),
+                v.get("journeys_silver", 0)),
+            "source_occurrence_count_mismatches": sum(
+                v.get(before, 0) != v.get(after, 0) for before, after in
+                (("lines_staging", "lines_silver"), ("journeys_staging", "journeys_silver"),
+                 ("passing_times_staging", "passing_times_silver"))),
             "eligible_service_occurrences_min": s.get("eligible_fixed", 0),
         }
     return metrics
@@ -204,6 +244,21 @@ def evaluate(profile, thresholds=None):
     rules = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     metrics = gate_metrics(profile)
     findings = []
+    expected, observed = profile.get("expected_providers"), profile.get("observed_providers")
+    def provider_list(value):
+        return (isinstance(value, list) and all(isinstance(p, str) and p.strip() for p in value)
+                and len(set(value)) == len(value))
+    if not provider_list(expected) or not expected or not provider_list(observed):
+        findings.append({"provider": "_snapshot", "rule": "provider_selection", "level": "fail",
+                         "value": {"expected": expected, "observed": observed},
+                         "limit": "a nonempty declared selection and an observed provider list are required"})
+    else:
+        for provider in sorted(set(expected) - set(observed)):
+            findings.append({"provider": provider, "rule": "missing_expected_provider", "level": "fail",
+                             "value": 0, "limit": "expected provider must have Silver rows"})
+        for provider in sorted(set(observed) - set(expected)):
+            findings.append({"provider": provider, "rule": "unexpected_provider", "level": "fail",
+                             "value": provider, "limit": "provider must belong to the declared selection"})
     for provider, values in metrics.items():
         for name, rule in rules.items():
             value = values.get(name)

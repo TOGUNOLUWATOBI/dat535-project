@@ -24,6 +24,7 @@ provider. "Before" is the staging Parquet, which holds every source occurrence;
 | References | Unresolved (no target) and ambiguous (several targets) references for route, pattern, line and day type |
 | Times | Invalid clock values, arrival after departure, non-monotonic times, overnight times kept with a day offset |
 | Calendar | Day types whose dates could not be derived, by reason |
+| Calendar impact | Distinct journeys with an unresolved calendar, divided by journeys before service-date expansion |
 | Service | Service occurrences in the window: accepted for Gold, excluded as flexible, rejected as invalid; valid fixed journeys that do not operate in the window |
 
 `ServiceJourney.DepartureTime` is optional: in the Nordic profile the times are
@@ -37,6 +38,8 @@ applies the rules in `config/quality_thresholds.json` to each provider:
 
 | Rule | Warn when | Stop when |
 | --- | --- | --- |
+| Provider selection | – | No declared providers, an expected provider has no Silver rows, or an undeclared provider appears |
+| Staging → Silver occurrences | – | Line, journey or passing-time counts differ for a provider |
 | Journeys quarantined | any | > 1% |
 | Passing times quarantined | any | > 1% |
 | Service occurrences rejected as invalid | any | > 1% |
@@ -45,6 +48,7 @@ applies the rules in `config/quality_thresholds.json` to each provider:
 | Unresolved references | any | – |
 | Conflicting definitions withheld | any | – |
 | Calendar issues | any | – |
+| Journeys affected by unresolved calendars | any | > 1% of journeys before date expansion |
 | Accepted service occurrences | – | none for a provider |
 
 * **pass**: Gold publishes.
@@ -55,6 +59,17 @@ applies the rules in `config/quality_thresholds.json` to each provider:
   workflow's processing step fails visibly.
 
 The full profile is saved with every Gold output (`metadata/quality_profile.json`).
+Gate version 2 records both the manifest's `expected_providers` and the
+`observed_providers` found in Silver. The provider-selection checks cannot be
+disabled by changing a numerical threshold. A deliberate zero-service-window
+override still requires the selected providers' data to be present. Empty or
+missing provider profiles cannot pass.
+
+Calendar issue counts remain warnings when they describe unused definitions.
+The impact rate measures distinct affected journeys, so a broken calendar
+cannot hide its impact by producing no expanded service-date rows. The same
+journey is counted once even when several of its day types are unresolved.
+
 The gate code and the thresholds are part of Gold's checkpoint identity, so
 changing a rule rebuilds Gold (Silver is reused). Without a gate, Gold would
 reconcile perfectly with whatever survived Silver, even after large exclusions.
@@ -66,9 +81,13 @@ The limits were set after profiling all ten 2026 snapshots. All of them have zer
 rejections, so any rejection should be noticed (warn), and more than 1% means
 something structural changed in the source or the code (stop).
 
-## Results on the ten 2026 snapshots
+## Previously recorded results on the ten 2026 snapshots
 
-All ten snapshots pass the gate for both providers. Most of the evidence
+The committed report records all ten snapshots passing the original gate for
+both providers. Gate version 2 and the expanded traces have now also passed on
+a fresh full January rebuild; see [the validation record](quality_validation_2026_11_10.md).
+The other snapshots need their evidence regenerated with the updated checker.
+Most of the evidence
 shows the source is consistent, rather than that much was repaired:
 
 * **Nothing rejected or collapsed.** In every snapshot, staging and Silver hold
@@ -107,7 +126,34 @@ Silver and checks how Gold treated the journey:
 | Calendar exception | Kolumbus, weekday service | Friday 20 February is marked "not available" in the XML; both the independent reading and Silver drop it (4 dates) |
 | Flexible | Kolumbus on-demand journey | Silver keeps it with its time window; Gold excludes it from departures and lists it as excluded |
 
-All four are consistent. The script exits with an error on any mismatch.
+The committed February report records the original four checks. The expanded
+checker (10 November) additionally:
+
+* Resolves pattern point → scheduled stop → assignment → quay → national stop
+  place, or a flexible stop place, directly from XML and compares each identity
+  and relevant resolved version with Silver. Missing or ambiguous targets stop
+  the check instead of selecting a candidate.
+* Compares `EarliestDepartureTime` and `LatestArrivalTime` separately with the
+  preserved Silver flexible-window fields. Empty fixed arrival/departure values
+  cannot by themselves make a flexible-window check pass.
+* Recounts **every source journey occurrence for the selected line across its
+  provider's XML files**, derives its dates independently, and compares daily
+  fixed counts and flexible exclusions with Gold. Repeated IDs in different
+  files remain separate occurrences. This supplements the Silver recount.
+
+The source checker imports no Silver, Gold or calendar transformation code.
+It supports the weekday/date/period rules exercised by these exports; unknown
+restrictions and conflicting or multiversion calendar definitions are refused.
+It is a bounded independent check, not a complete NeTEx schema validator.
+The script exits with an error on a mismatch or unsupported source evidence.
+
+Regression tests deliberately move another journey's date in both Silver and
+Gold. Their counts still agree with each other, but the independent whole-line
+XML recount detects the error. Other tests change a physical quay or swap the
+flexible window while leaving fixed times unchanged.
+
+Historical Markdown evidence is not rewritten automatically. Regenerate it
+with the commands below to record the additional checks on the school dataset.
 
 ## Running it
 
