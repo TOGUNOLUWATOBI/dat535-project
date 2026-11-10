@@ -1,13 +1,16 @@
 # Full-month daily service
 
-The completed local rebuild and per-month totals are in
-[verified coverage](monthly_coverage.md). The school-server data must be rebuilt
-separately using the commands below.
+The school-server rebuild completed on **10 November 2026**: all **22 jobs**
+finished, published-plan coverage passed for **January–November 2026**, and route
+history was generated. The [verified coverage](monthly_coverage.md) page records
+that completion separately from the detailed January–September local totals.
+Use the commands below to rerun the batch, resume interrupted work or extend
+coverage when adding months.
 
 The processing default is now the first through the last day of the snapshot's
 calendar month, including February and leap years. The original seven-day
-outputs remain historical evidence; they must be rebuilt before the full-month
-GUI can use them. Source XML bytes and completed attempts are preserved. With
+outputs remain historical evidence; the current GUI uses the rebuilt full-month
+outputs. Source XML bytes and completed attempts are preserved. With
 ZIP retention, verified XML is stored compressed and extracted temporarily.
 
 ## Sources for early dates
@@ -28,15 +31,18 @@ continues to compare the original 15th-of-month observations and scheduled
 primary observations. It does not reinterpret verified transitions because an
 extra calendar source was added.
 
-## Rebuilding on the Spark server
+## Rerunning or extending the Spark-server rebuild
 
-Check out the branch containing this change before merging it into the scheduled
-workflow's branch. The existing registry and original historical XML must be
-available. Use the paths from your server, not paths copied from a Mac manifest.
+Run from an up-to-date project checkout on the school server. The existing
+registry and validated Bronze ZIPs (or expanded XML) must be available. Use the
+paths from your server, not paths copied from a Mac manifest. This example
+reuses the recorded January–October support range; registered November primary
+exports receive support automatically. Adjust the month range when adding months.
+The existing `calendar_support_2026_01_09` directory keeps its historical name.
 
 ```bash
 python3 -B -u -m pipeline.ingestion.prepare_monthly_support \
-  --providers KOL AKT --from-month 2026-01 --to-month 2026-09 \
+  --providers KOL AKT --from-month 2026-01 --to-month 2026-10 \
   --output /srv/dat535/data/bronze/entur/calendar_support_2026_01_09 \
   --remove-national-after-validation
 
