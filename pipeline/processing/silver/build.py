@@ -1,16 +1,23 @@
-"""Validated Silver projections and bounded service dates for one snapshot."""
+"""Validated Silver projections and bounded service dates for one snapshot.
 
-from datetime import date
+Silver resolves NeTEx references (journey -> pattern -> route -> line, passing
+time -> pattern point -> scheduled stop -> assignment -> quay/flexible stop),
+converts clock times to seconds, expands calendars inside the service window
+and flags every row with reason codes. Nothing is dropped: rows that fail a
+rule are kept with ``is_valid = false`` and copied to ``quarantine_*`` tables,
+and Silver must keep exactly the staged line, journey and passing-time counts.
+"""
+
 import json
 from pathlib import Path
 
-from pipeline.ingestion.generate_provider_dataset import save_json
-from pipeline.processing.bronze.xml_to_parquet import utc_now
-from .calendars import expand_calendars
+from pipeline.common import utc_now, write_json
 from pipeline.processing.windows import service_window, window_signature
+from .calendars import expand_calendars
 
 
 def occurrence(role):
+    """Stable key for one staged occurrence: its role plus source file and position."""
     from pyspark.sql import functions as F
     names = ["snapshot_date", "provider", "source_member", "source_xml_sha256", "composite_frame_id",
              "parent_frame_id", "parent_frame_version", "parent_frame_index", "entity_type", "entity_index"]
@@ -35,9 +42,14 @@ def lookup(source, target, ref, version, prefix, local=True, provider=True, extr
     condition = F.col(ref) == F.col(prefix + "entity_id")
     condition &= (F.col(version).isNull() | F.col(version).isin("any", "*")
                   | (F.col(version) == F.col(prefix + "entity_version")))
-    if provider: condition &= F.col("provider") == F.col(prefix + "provider")
-    if local: condition &= F.col("source_member") == F.col(prefix + "source_member")
-    for left, right in extra: condition &= F.col(left) == F.col(prefix + right)
+    if provider:
+        condition &= F.col("provider") == F.col(prefix + "provider")
+    if local:  # NeTEx local references resolve within the same XML file.
+        condition &= F.col("source_member") == F.col(prefix + "source_member")
+    for left, right in extra:
+        condition &= F.col(left) == F.col(prefix + right)
+    # Count candidates per source row, then keep one row: <prefix>resolved is true
+    # only for exactly one match, so 0 (unresolved) and >1 (ambiguous) stay visible.
     result = source.join(target, condition, "left")
     window = Window.partitionBy("occurrence_key")
     result = result.withColumn(prefix + "matches", F.count(prefix + "occurrence_key").over(window))
@@ -48,6 +60,11 @@ def lookup(source, target, ref, version, prefix, local=True, provider=True, extr
 
 
 def build_silver(spark, staging, output, service_from=None, service_to=None, history_role="primary"):
+    """Build every Silver table for one staged snapshot in ``output`` and return its manifest.
+
+    ``history_role`` is recorded for downstream use: ``calendar_support`` outputs
+    fill service dates but are not observations in route history.
+    """
     from pyspark.sql import functions as F, Window
     from pyspark.sql.types import DateType, StringType, StructField, StructType
     staging, output = Path(staging).resolve(), Path(output).resolve()
@@ -59,24 +76,34 @@ def build_silver(spark, staging, output, service_from=None, service_to=None, his
     first, last = service_window(source["snapshot_date"], service_from, service_to)
     if history_role not in ("primary", "calendar_support"):
         raise ValueError("Unknown history role")
-    output.mkdir(parents=True, exist_ok=False); (output / "metadata").mkdir()
+    output.mkdir(parents=True, exist_ok=False)
+    (output / "metadata").mkdir()
     report = {"schema_version": 1, "layer": "silver", "status": "in_progress",
               "snapshot_date": source["snapshot_date"], "providers": source["providers"],
               "source_manifest": str(staging / "metadata/manifest.json"), "started_at_utc": utc_now(),
               "service_from": str(first), "service_to": str(last), "history_role": history_role,
               "tables": {}, "quality": {}}
     report["service_window_policy"] = window_signature(report)[0]
-    path = output / "metadata/manifest.json"; save_json(path, report)
-    def read(name): return spark.read.parquet(str(staging / source["tables"][name]["path"]))
+    path = output / "metadata/manifest.json"
+    write_json(path, report)
+
+    def read(name):
+        return spark.read.parquet(str(staging / source["tables"][name]["path"]))
+
     def write(name, frame):
+        """Save a table, record it in the manifest and continue from the saved copy."""
         target = output / name
         frame.write.mode("errorifexists").option("compression", "snappy").parquet(str(target))
-        saved = spark.read.parquet(str(target)); count = saved.count()
+        saved = spark.read.parquet(str(target))
+        count = saved.count()
         report["tables"][name] = {"path": name, "rows": count, "schema": json.loads(saved.schema.json()),
             "parquet_bytes": sum(p.stat().st_size for p in target.glob("*.parquet"))}
-        save_json(path, report); print(f"silver/{name}: {count:,} rows", flush=True)
+        write_json(path, report)
+        print(f"silver/{name}: {count:,} rows", flush=True)
         return saved
+
     def flatten(name, fields):
+        """Staged entity rows with source context, an occurrence key and the selected fields."""
         raw = read(name)
         return raw.select("snapshot_date", "provider", "source_member", "source_xml_sha256",
             "composite_frame_id", "composite_frame_version", "parent_frame_id", "parent_frame_version",
@@ -84,6 +111,7 @@ def build_silver(spark, staging, output, service_from=None, service_to=None, his
             "valid_from", "valid_to", occurrence(name).alias("occurrence_key"),
             F.col("record._id").alias("entity_id"), F.col("record._version").alias("entity_version"),
             *[F.col(expression).alias(label) for label, expression in fields.items()])
+
     def canonical(name, frame, payload):
         # Definitions with identical keys and payloads can be collapsed; conflicting
         # definitions are withheld. Original occurrences remain in staging.
@@ -94,9 +122,11 @@ def build_silver(spark, staging, output, service_from=None, service_to=None, his
         conflicts = joined.where("variants>1")
         conflict_count = conflicts.count()
         report["quality"][name + "_conflicting_occurrences"] = conflict_count
-        if conflict_count: write("quarantine_" + name, conflicts)
+        if conflict_count:
+            write("quarantine_" + name, conflicts)
         window = Window.partitionBy(*keys).orderBy("occurrence_key")
         return joined.where("variants=1").withColumn("_rank", F.row_number().over(window)).where("_rank=1").drop("_rank", "variants")
+
     try:
         lines = write("lines", flatten("lines", {"name": "record.Name", "public_code": "record.PublicCode",
             "transport_mode": "record.TransportMode", "line_kind": "entity_type"}))
@@ -171,7 +201,6 @@ def build_silver(spark, staging, output, service_from=None, service_to=None, his
         dtypes = calendar_frames["day_types"].select("provider", "source_member",
             occurrence("day_types").alias("occurrence_key"), F.col("record._id").alias("entity_id"),
             F.col("record._version").alias("entity_version"))
-        raw_journeys = read("service_journeys")
         journeys = flatten("service_journeys", {"line_ref": "record.LineRef._ref", "line_ref_version": "record.LineRef._version",
             "pattern_ref": "record.JourneyPatternRef._ref", "pattern_ref_version": "record.JourneyPatternRef._version",
             "departure_time_raw": "record.DepartureTime", "departure_day_offset_raw": "record.DepartureDayOffset",
@@ -287,7 +316,9 @@ def build_silver(spark, staging, output, service_from=None, service_to=None, his
             calendar_issues=len(calendar_errors),
             gold_eligible_service_occurrences=dated.where("is_valid AND NOT is_flexible").count())
         report.update(status="complete", completed_at_utc=utc_now())
-        save_json(path,report); return report
+        write_json(path, report)
+        return report
     except Exception as error:
         report.update(status="failed", completed_at_utc=utc_now(), error=f"{type(error).__name__}: {error}")
-        save_json(path,report); raise
+        write_json(path, report)
+        raise

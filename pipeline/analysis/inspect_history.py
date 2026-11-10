@@ -2,11 +2,11 @@
 
 Reads the newest complete route-history output under DATA_ROOT. Examples:
 
-    bash scripts/inspect_route_history.sh --data-root /srv/dat535/data summary
-    bash scripts/inspect_route_history.sh --data-root /srv/dat535/data candidates
-    bash scripts/inspect_route_history.sh --data-root /srv/dat535/data month 2026-06-15
-    bash scripts/inspect_route_history.sh --data-root /srv/dat535/data line AKT 100
-    bash scripts/inspect_route_history.sh --data-root /srv/dat535/data date AKT 100 2026-07-20
+    bash scripts/run.sh inspect --data-root /srv/dat535/data summary
+    bash scripts/run.sh inspect --data-root /srv/dat535/data candidates
+    bash scripts/run.sh inspect --data-root /srv/dat535/data month 2026-06-15
+    bash scripts/run.sh inspect --data-root /srv/dat535/data line AKT 100
+    bash scripts/run.sh inspect --data-root /srv/dat535/data date AKT 100 2026-07-20
 
 ``line`` and ``date`` accept a bus number (public code) or a full NeTEx line ID.
 Departure numbers are planned departures in each snapshot's Gold window
@@ -16,12 +16,14 @@ Departure numbers are planned departures in each snapshot's Gold window
 import argparse
 from datetime import date
 import json
-import os
 from pathlib import Path
 import sys
 
+from pipeline.spark_runtime import start_spark
+
 
 def latest_history(data_root):
+    """(path, manifest) of the most recently completed route-history output under ``data_root``."""
     root = Path(data_root) / "gold" / "entur" / "history"
     found = []
     for manifest in root.glob("*/history-*/metadata/manifest.json"):
@@ -32,12 +34,13 @@ def latest_history(data_root):
         if data.get("status") == "complete":
             found.append((data.get("completed_at_utc", ""), manifest.parent.parent, data))
     if not found:
-        raise SystemExit(f"No complete route history under {root}; run scripts/run_route_history.sh first")
+        raise SystemExit(f"No complete route history under {root}; run scripts/run.sh history first")
     _, path, data = max(found, key=lambda item: item[0])
     return path, data
 
 
 def clock(seconds):
+    """Seconds after the operating day's midnight as ``HH:MM`` (``+1d`` after midnight)."""
     if seconds is None:
         return "-"
     seconds = int(seconds)
@@ -46,6 +49,8 @@ def clock(seconds):
 
 
 class History:
+    """Spark access to one route-history output, with cached stop names for display."""
+
     def __init__(self, spark, path):
         self.spark, self.path = spark, Path(path)
         self._names = None
@@ -66,6 +71,7 @@ class History:
         return ", ".join(shown) + (f" … (+{more} more)" if more > 0 else "")
 
     def resolve(self, provider, line):
+        """Line IDs for a bus number (public code) or a full NeTEx line ID."""
         from pyspark.sql import functions as F
         snapshots = self.table("line_snapshots").where(F.col("provider") == provider.upper())
         if ":" in line:
@@ -235,20 +241,21 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("summary")
     commands.add_parser("candidates")
-    month = commands.add_parser("month"); month.add_argument("from_snapshot")
-    line = commands.add_parser("line"); line.add_argument("provider"); line.add_argument("line")
-    when = commands.add_parser("date"); when.add_argument("provider"); when.add_argument("line"); when.add_argument("service_date")
+    month = commands.add_parser("month")
+    month.add_argument("from_snapshot")
+    line = commands.add_parser("line")
+    line.add_argument("provider")
+    line.add_argument("line")
+    when = commands.add_parser("date")
+    when.add_argument("provider")
+    when.add_argument("line")
+    when.add_argument("service_date")
     args = parser.parse_args(argv)
     if args.history:
         path, report = args.history, json.loads((args.history / "metadata/manifest.json").read_text())
     else:
         path, report = latest_history(args.data_root)
-    from pyspark.sql import SparkSession
-    if args.master.startswith("local"):
-        os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-    spark = (SparkSession.builder.appName("DAT535-inspect-history").master(args.master)
-             .config("spark.ui.showConsoleProgress", "false").getOrCreate())
-    spark.sparkContext.setLogLevel("ERROR")
+    spark = start_spark("DAT535-inspect-history", args.master, log_level="ERROR")
     try:
         h = History(spark, path)
         if args.command == "summary":

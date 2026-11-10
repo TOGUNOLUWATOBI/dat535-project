@@ -19,17 +19,9 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 import zipfile
 
+from pipeline.common import sha256_file, utc_now, write_json
 from .download_entur_netex import file_checksums
-from .generate_provider_dataset import (
-    extract_snapshot,
-    save_json,
-    validate_snapshot,
-    verify_materialized_snapshot,
-)
-
-
-def utc_now():
-    return datetime.now(timezone.utc).isoformat()
+from .generate_provider_dataset import extract_snapshot, validate_snapshot, verify_materialized_snapshot
 
 
 def check_archive(path):
@@ -55,6 +47,7 @@ def check_archive(path):
 
 
 def verify_previous(manifest_path, identity):
+    """Check a cataloged earlier import, restoring its XML from ZIP storage while checking."""
     from pipeline.storage.zip_bronze import snapshot_xml
     with snapshot_xml(manifest_path):
         return _verify_previous(manifest_path, identity)
@@ -70,10 +63,10 @@ def _verify_previous(manifest_path, identity):
         raise RuntimeError(f"Catalog entry does not identify a complete matching import: {path}")
     root = path.parent.parent
     raw = root / previous["uploaded_archive"]
-    if not raw.is_file() or file_checksums(raw)[0] != identity[0]:
+    if not raw.is_file() or sha256_file(raw) != identity[0]:
         raise RuntimeError(f"Cataloged uploaded archive is missing or changed: {raw}")
     compact = root / previous["combined_zip"]
-    if not compact.is_file() or file_checksums(compact)[0] != previous["combined_zip_sha256"]:
+    if not compact.is_file() or sha256_file(compact) != previous["combined_zip_sha256"]:
         raise RuntimeError(f"Cataloged selected ZIP is missing or changed: {compact}")
     lineage = json.loads((root / "metadata/lineage.json").read_text())
     verify_materialized_snapshot(root / previous["xml_directory"],
@@ -109,7 +102,7 @@ def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None, zip_
         "started_at_utc": utc_now(), "snapshot_date": day.isoformat(),
         "providers": providers, "source_name": source.name,
     }
-    save_json(manifest_path, manifest)
+    write_json(manifest_path, manifest)
     connection = None
     try:
         sha256, md5 = file_checksums(source)
@@ -117,15 +110,14 @@ def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None, zip_
         identity = (sha256, day.isoformat(), ",".join(sorted(providers)))
         manifest.update(source_sha256=sha256, source_md5_base64=md5,
                         source_bytes=size, ingestion_id=sha256 + ":" + identity[2])
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         catalog.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(catalog, timeout=120)
         connection.execute("""CREATE TABLE IF NOT EXISTS manual_imports (
             source_sha256 TEXT NOT NULL, snapshot_date TEXT NOT NULL,
             providers TEXT NOT NULL, manifest_path TEXT NOT NULL,
             PRIMARY KEY (source_sha256, snapshot_date, providers))""")
-        # Serialize the check/import/register sequence, including concurrent
-        # CLI or future GUI calls. A crashed process releases SQLite's lock;
+        # Serialize the check/import/register sequence across concurrent imports. A crashed process releases SQLite's lock;
         # its uncommitted registration is rolled back, preserving its files.
         connection.execute("BEGIN IMMEDIATE")
         previous = connection.execute(
@@ -136,7 +128,7 @@ def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None, zip_
             original = verify_previous(previous[0], identity)
             manifest.update(status="duplicate", duplicate_of=os.path.relpath(original, output),
                             completed_at_utc=utc_now())
-            save_json(manifest_path, manifest)
+            write_json(manifest_path, manifest)
             connection.commit()
             print(f"duplicate: {manifest_path} (original: {original})", flush=True)
             return manifest
@@ -144,7 +136,7 @@ def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None, zip_
         raw = output / "uploads/original.zip"
         raw.parent.mkdir()
         manifest["uploaded_archive"] = str(raw.relative_to(output))
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         with source.open("rb") as infile, raw.open("xb") as outfile:
             shutil.copyfileobj(infile, outfile, length=1024 * 1024)
         if raw.stat().st_size != size or file_checksums(raw) != (sha256, md5):
@@ -157,22 +149,22 @@ def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None, zip_
         lineage = extract_snapshot(raw, directory, compact, providers)
         for item in lineage:
             item["xml_path"] = str(Path(item["xml_path"]).relative_to(output))
-        save_json(metadata / "lineage.json", lineage)
+        write_json(metadata / "lineage.json", lineage)
         print(f"Validating all {len(lineage)} XML files and provider references", flush=True)
         report = validate_snapshot(directory, lineage, providers, day)
-        save_json(metadata / "validation.json", report)
+        write_json(metadata / "validation.json", report)
         if report["status"] not in ("passed", "passed_with_warnings"):
             raise RuntimeError("Provider reference validation failed; see metadata/validation.json")
         manifest.update(
             status="complete_with_warnings" if report["status"] == "passed_with_warnings" else "complete",
             xml_directory=str(directory.relative_to(output)), combined_zip=str(compact.relative_to(output)),
-            combined_zip_sha256=file_checksums(compact)[0],
+            combined_zip_sha256=sha256_file(compact),
             xml_files=report["xml_files"], provider_xml_bytes=report["provider_xml_bytes"],
             total_xml_bytes=report["total_xml_bytes"],
             duplicate_id_version_occurrences=sum(report["duplicate_provider_id_version_pairs"].values()),
             completed_at_utc=utc_now(),
         )
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         if zip_only:
             from pipeline.storage.zip_bronze import retain_snapshot
             retain_snapshot(manifest_path, apply=True, document=manifest)
@@ -185,7 +177,7 @@ def ingest_zip(source, day, output, providers=("KOL", "AKT"), catalog=None, zip_
             connection.rollback()
         manifest.update(status="failed", completed_at_utc=utc_now(),
                         error=f"{type(error).__name__}: {error}")
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         raise
     finally:
         if connection is not None:

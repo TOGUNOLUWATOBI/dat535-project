@@ -2,7 +2,7 @@
 # Start the Streamlit Gold explorer (read-only). Open http://localhost:8501
 # (VS Code forwards the port automatically when connected over SSH).
 # Uses its own environment so the Spark processing environment is untouched:
-#   python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements-gui.txt
+#   python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements.txt
 # --restart stops this app on its configured port and starts it in the background.
 set -euo pipefail
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"

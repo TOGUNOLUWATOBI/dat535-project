@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 
 from .download_entur_netex import parse_month
-from .generate_provider_dataset import generate, save_json
+from pipeline.common import write_json
+from .generate_provider_dataset import generate
 from pipeline.processing.bronze.staging_sources import load_snapshot_sources
 from pipeline.processing.windows import month_bounds
 from pipeline.quality.source_checks import frame_validity
@@ -18,6 +19,11 @@ from pipeline.storage.zip_bronze import with_snapshot_xml
 
 
 def existing_source(root, day):
+    """Manifest of an already validated export for ``day`` under ``root``, or None.
+
+    A previously failed attempt for the same day is preserved and refused, so
+    the caller moves on to another candidate date instead of retrying it.
+    """
     failures = []
     for path in sorted(root.rglob("manifest.json")):
         try:
@@ -37,6 +43,7 @@ def existing_source(root, day):
 
 @with_snapshot_xml
 def covers_month(manifest, day, first, last, providers):
+    """True if every provider's shared calendar validity spans the whole month."""
     selection = load_snapshot_sources(manifest, day)
     if set(selection["providers"]) != set(providers):
         raise ValueError("Support source has a different provider selection")
@@ -52,6 +59,7 @@ def covers_month(manifest, day, first, last, providers):
 
 
 def prepare(root, first_month, last_month, providers, remove_national=False, excluded_dates=()):
+    """Select (and if needed download) one full-month support export per month; return the plan path."""
     if first_month > last_month:
         raise ValueError("The first month must not follow the last month")
     if not providers or len(set(providers)) != len(providers):
@@ -91,14 +99,14 @@ def prepare(root, first_month, last_month, providers, remove_national=False, exc
                 entry.update(status="rejected", error=f"{type(error).__name__}: {error}")
                 print(f"Source refused: {first:%Y-%m} ← {day}: {entry['error']}", flush=True)
             plan["attempts"].append(entry)
-            save_json(plan_path, plan)
+            write_json(plan_path, plan)
             if found:
                 break
         if not found:
             missing.append(str(first)[:7])
         month = last + timedelta(days=1)
     plan.update(status="failed" if missing else "complete", missing_months=missing)
-    save_json(plan_path, plan)
+    write_json(plan_path, plan)
     if missing:
         raise RuntimeError(f"No validated full-month support for {missing}; see {plan_path}")
     print(f"COMPLETE: {plan_path}", flush=True)

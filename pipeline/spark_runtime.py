@@ -1,4 +1,4 @@
-"""Start bounded Spark workers and report failures even after the JVM has exited."""
+"""Start Spark sessions and bounded workers, and report failures even after the JVM has exited."""
 
 import os
 import re
@@ -7,6 +7,7 @@ import sys
 
 
 def error_text(error):
+    """``Type: message`` for any exception, even one whose ``str()`` needs the dead Java gateway."""
     try:
         detail = str(error)
     except Exception:
@@ -15,13 +16,19 @@ def error_text(error):
 
 
 def memory_size(value):
+    """Validate a JVM heap size such as ``2g`` or ``1536m`` (also used as an argparse type)."""
     if not re.fullmatch(r"[1-9][0-9]*[mMgG]", value):
         raise ValueError("Driver memory must be a positive size such as 2g or 1536m")
     return value.lower()
 
 
 def worker_environment(driver_memory="2g"):
-    """Set the heap before JVM launch; never inherit an existing Python gateway."""
+    """Environment for a new Spark process with an explicit driver heap.
+
+    The heap must be set before the JVM starts, so it goes into
+    ``PYSPARK_SUBMIT_ARGS``. Any existing Python gateway is dropped so the child
+    never attaches to its parent's JVM.
+    """
     environment = dict(os.environ)
     environment.pop("PYSPARK_GATEWAY_PORT", None)
     environment.pop("PYSPARK_GATEWAY_SECRET", None)
@@ -50,7 +57,27 @@ def worker_environment(driver_memory="2g"):
     return environment
 
 
+def start_spark(app_name, master="local[2]", log_level="WARN"):
+    """The project's standard Spark session: Oslo time zone, few shuffle partitions, quiet console.
+
+    Local masters run Python workers with this interpreter, so the driver and
+    workers use the same environment and package versions.
+    """
+    from pyspark.sql import SparkSession
+
+    if master.startswith("local"):
+        os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    spark = (SparkSession.builder.appName(app_name).master(master)
+             .config("spark.sql.session.timeZone", "Europe/Oslo")
+             .config("spark.sql.shuffle.partitions", "4")
+             .config("spark.ui.showConsoleProgress", "false")
+             .getOrCreate())
+    spark.sparkContext.setLogLevel(log_level)
+    return spark
+
+
 def stop_spark(spark):
+    """Stop a session if one was started, without hiding the error that ended the job."""
     if spark is not None:
         try:
             spark.stop()

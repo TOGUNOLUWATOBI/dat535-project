@@ -1,0 +1,14 @@
+# DAT535 Python dependencies (Python 3.11+, Java 17 for Spark).
+# Ingestion uses only the standard library.
+#
+#   python3 -m venv ~/spark-env      && ~/spark-env/bin/pip install -r requirements.txt
+#   python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements.txt
+
+# Processing: Spark SQL's built-in XML reader (no separate spark-xml connector)
+pyspark==4.2.0
+
+# GUI: reads Gold Parquet with pandas, no Spark session
+streamlit==1.45.1
+pandas==2.3.3
+pyarrow==26.0.1
+altair==5.5.0

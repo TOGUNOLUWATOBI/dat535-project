@@ -1,3 +1,4 @@
+# Local source datasets and verification evidence (kept outside Git)
 entur_netex_snapshots/
 audit/
 
@@ -11,9 +12,19 @@ __pycache__/
 .DS_Store
 build/
 dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Generated pipeline outputs; keep the documented directory skeleton
-/data/**/*
-!/data/**/
-!/data/**/.gitkeep
-!/data/**/README.md
+# Generated archives, tables, state and logs, including accidental root outputs.
+*.zip
+*.parquet
+*.sqlite3
+*.sqlite3-*
+*.sqlite3.locks/
+*.log
+*.part
+
+# Generated pipeline outputs (local runs default to data/bronze/entur/...)
+/data/

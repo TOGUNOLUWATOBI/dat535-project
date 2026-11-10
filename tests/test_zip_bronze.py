@@ -8,9 +8,8 @@ from unittest.mock import patch
 import zipfile
 import zlib
 
-from pipeline.bronze_storage import discard_provider_zips
-from pipeline.storage.zip_bronze import (migrate, retain_snapshot, snapshot_xml,
-                                        specification, verify_zip)
+from pipeline.storage.maintenance import discard_provider_zips
+from pipeline.storage.zip_bronze import migrate, retain_snapshot, snapshot_xml, specification, verify_zip
 
 
 class ZipBronzeTests(unittest.TestCase):
@@ -23,16 +22,25 @@ class ZipBronzeTests(unittest.TestCase):
         base = self.root / name
         xml = base / "xml/2026-01-15"
         xml.mkdir(parents=True)
-        raw = {"nested/KOL_line.xml": b"<raw>original reference KOL:Line:1</raw>" * 100,
-               "AKT_line.xml": b"<AKT>unchanged</AKT>" * 100,
-               "_stops.xml": b"<StopPlace id='NSR:StopPlace:1'/>" * 100}
+        raw = {
+            "nested/KOL_line.xml": b"<raw>original reference KOL:Line:1</raw>" * 100,
+            "AKT_line.xml": b"<AKT>unchanged</AKT>" * 100,
+            "_stops.xml": b"<StopPlace id='NSR:StopPlace:1'/>" * 100,
+        }
         lineage = []
         for member, data in raw.items():
             path = xml / member
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-            lineage.append({"member": member, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-                            "source_crc32": zlib.crc32(data), "provider": None if member.startswith("_") else member[:3]})
+            lineage.append(
+                {
+                    "member": member,
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "source_crc32": zlib.crc32(data),
+                    "provider": None if member.startswith("_") else member[:3],
+                }
+            )
         metadata = base if historical else base / "metadata"
         metadata.mkdir(exist_ok=True)
         if historical:
@@ -44,10 +52,19 @@ class ZipBronzeTests(unittest.TestCase):
             (base / "validation").mkdir()
         validation_path = base / "validation/2026-01-15.json" if historical else metadata / "validation.json"
         validation_path.write_text(json.dumps(validation))
-        row = {"status": "validated" if historical else "complete", "snapshot_date": "2026-01-15",
-               "xml_directory": str(xml.relative_to(base)), "combined_zip": None, "xml_only": True,
-               "validation_report": str(validation_path.relative_to(base))}
-        document = {"status": "complete", "providers": ["KOL", "AKT"], "snapshots": [row]} if historical else {**row, "providers": ["KOL", "AKT"]}
+        row = {
+            "status": "validated" if historical else "complete",
+            "snapshot_date": "2026-01-15",
+            "xml_directory": str(xml.relative_to(base)),
+            "combined_zip": None,
+            "xml_only": True,
+            "validation_report": str(validation_path.relative_to(base)),
+        }
+        document = (
+            {"status": "complete", "providers": ["KOL", "AKT"], "snapshots": [row]}
+            if historical
+            else {**row, "providers": ["KOL", "AKT"]}
+        )
         manifest = metadata / "manifest.json"
         manifest.write_text(json.dumps(document))
         return manifest, xml, raw
@@ -70,8 +87,10 @@ class ZipBronzeTests(unittest.TestCase):
                     self.assertEqual(set(archive.namelist()), set(raw))
                     for member, data in raw.items():
                         self.assertEqual(archive.read(member), data)
-                self.assertEqual(next(manifest.parent.glob("storage_backups/*")).read_text(),
-                                 json.dumps(json.loads(original), indent=2) + "\n")
+                self.assertEqual(
+                    next(manifest.parent.glob("storage_backups/*")).read_text(),
+                    json.dumps(json.loads(original), indent=2) + "\n",
+                )
                 if lineage:
                     self.assertEqual(lineage.read_bytes(), before)
                 with snapshot_xml(manifest, "2026-01-15"):
@@ -170,10 +189,12 @@ class ZipBronzeTests(unittest.TestCase):
     def test_failed_snapshots_uploads_and_other_hardlinks_are_preserved(self):
         manifest, xml, raw = self.fixture()
         failed, failed_xml, _ = self.fixture("failed")
-        data = json.loads(failed.read_text()); data["status"] = "failed"
+        data = json.loads(failed.read_text())
+        data["status"] = "failed"
         failed.write_text(json.dumps(data))
         upload = manifest.parent.parent / "uploads/original.zip"
-        upload.parent.mkdir(); upload.write_bytes(b"original uploaded archive")
+        upload.parent.mkdir()
+        upload.write_bytes(b"original uploaded archive")
         linked = self.root / "other.xml"
         os.link(xml / "_stops.xml", linked)
         result = migrate(self.root, apply=True)

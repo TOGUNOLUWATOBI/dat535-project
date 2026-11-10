@@ -8,13 +8,13 @@ Example (keeps national ZIPs unless the explicit removal option is supplied):
 
 Each snapshot has original XML, source checksums, lineage and a validation report.
 --zip-only retains the selected ZIP and materializes XML only while processing.
---xml-only remains available for expanded storage. XML bytes are never rewritten.
+--xml-only keeps extracted XML without a compact ZIP. XML bytes are never rewritten.
 """
 
 import argparse
 from collections import Counter
 from contextlib import ExitStack
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -23,19 +23,15 @@ import time
 import xml.etree.ElementTree as ET
 import zipfile
 
-from .download_entur_netex import download, file_checksums, make_url, month_range, parse_month, source_metadata
+from pipeline.common import BLOCK_SIZE, sha256_file, utc_now, write_json
+from .download_entur_netex import download, make_url, month_range, parse_month, source_metadata
 
 NETEX = "http://www.netex.org.uk/netex"
 ROOT = f"{{{NETEX}}}PublicationDelivery"
 
 
-def save_json(path, value):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
 def provider_for(name, providers):
+    """Provider code that owns an XML member (``KOL_*.xml`` or ``_KOL_*.xml``), or None."""
     base = Path(name).name.upper()
     if not base.endswith(".XML"):
         return None
@@ -43,11 +39,18 @@ def provider_for(name, providers):
 
 
 def selected_member(name, providers):
+    """True for the provider XML and the national ``_stops.xml`` kept in a snapshot."""
     base = Path(name).name.upper()
     return provider_for(name, providers) is not None or base == "_STOPS.XML"
 
 
 def extract_snapshot(source, directory, zip_path, providers):
+    """Copy the selected members of a national ZIP to XML (and optionally a compact ZIP).
+
+    Every member is streamed once, written byte for byte and hashed on the way.
+    The compact ZIP is built as ``.part`` and only published after its members
+    match the national source exactly. Returns the lineage records.
+    """
     if directory.exists() or (zip_path is not None and (zip_path.exists() or zip_path.with_suffix(".part").exists())):
         raise FileExistsError(f"Snapshot output already exists; use a new --output: {directory}")
     directory.mkdir(parents=True)
@@ -75,7 +78,7 @@ def extract_snapshot(source, directory, zip_path, providers):
             written = 0
             with src.open(info) as infile, target.open("xb") as xml, ExitStack() as members:
                 zipped = members.enter_context(dst.open(info.filename, "w")) if dst else None
-                for chunk in iter(lambda: infile.read(1024 * 1024), b""):
+                for chunk in iter(lambda: infile.read(BLOCK_SIZE), b""):
                     xml.write(chunk)
                     if zipped is not None:
                         zipped.write(chunk)
@@ -105,7 +108,7 @@ def verify_materialized_snapshot(directory, zip_path, lineage):
     """Resume only when both stored representations still match source lineage."""
     for item in lineage:
         path = directory / item["member"]
-        if not path.is_file() or path.stat().st_size != item["bytes"] or file_checksums(path)[0] != item["sha256"]:
+        if not path.is_file() or path.stat().st_size != item["bytes"] or sha256_file(path) != item["sha256"]:
             raise RuntimeError(f"Existing XML does not match recorded source lineage: {path}")
     if zip_path is None:
         return
@@ -227,6 +230,12 @@ def validate_snapshot(directory, lineage, providers, snapshot_date):
 
 
 def generate(providers, dates, output, remove_national=False, resume=False, xml_only=False, zip_only=False):
+    """Download, extract and validate one snapshot per date into a new dataset directory.
+
+    The dataset manifest is saved after every step, so an interrupted run can be
+    resumed with ``resume=True``; that re-verifies earlier output and reuses the
+    exact source generations recorded on the first run.
+    """
     if xml_only and zip_only:
         raise ValueError("Choose XML-only or ZIP-only retention, not both")
     output = output.resolve()
@@ -247,10 +256,10 @@ def generate(providers, dates, output, remove_national=False, resume=False, xml_
         output.mkdir(parents=True)
         for child in ("national", "xml", "zip", "validation", "lineage"):
             (output / child).mkdir()
-        manifest = {"created_at_utc": datetime.now(timezone.utc).isoformat(), "providers": providers, "xml_only": xml_only, "zip_only": zip_only,
+        manifest = {"created_at_utc": utc_now(), "providers": providers, "xml_only": xml_only, "zip_only": zip_only,
                     "status": "in_progress", "snapshots": [], "cleanup": "National source ZIPs removed only after successful snapshot validation" if remove_national else "National source ZIPs retained"}
     manifest_path = output / "manifest.json"
-    save_json(manifest_path, manifest)
+    write_json(manifest_path, manifest)
     identities = {}
     for day in dates:
         key = day.strftime("%Y%m%d")
@@ -261,7 +270,7 @@ def generate(providers, dates, output, remove_national=False, resume=False, xml_
     hashes = [m["md5Hash"] for m in identities.values()]
     if len(hashes) != len(set(hashes)):
         raise RuntimeError("Repeated national source payloads across requested dates; refusing historical batch")
-    save_json(output / "source_metadata.json", identities)
+    write_json(output / "source_metadata.json", identities)
     for index, day in enumerate(dates, 1):
         key = day.strftime("%Y%m%d")
         iso = day.isoformat()
@@ -294,7 +303,7 @@ def generate(providers, dates, output, remove_national=False, resume=False, xml_
                "national_zip": str(raw), "national_removed": False, "xml_directory": str(directory),
                "combined_zip": str(compact) if compact is not None else None, "xml_only": xml_only}
             manifest["snapshots"].append(row)
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         print(f"[{index}/{len(dates)}] {iso}: downloading national source", flush=True)
         try:
             row["source_sha256"] = download(url, raw, metadata)
@@ -310,28 +319,28 @@ def generate(providers, dates, output, remove_national=False, resume=False, xml_
                     raise RuntimeError("Stored lineage does not match verified national source")
             else:
                 lineage = extract_snapshot(raw, directory, compact, providers)
-                save_json(lineage_path, lineage)
+                write_json(lineage_path, lineage)
             print(f"  Validating all {len(lineage)} XML files and provider references", flush=True)
             report = validate_snapshot(directory, lineage, providers, day)
             report_path = output / "validation" / f"{iso}.json"
-            save_json(report_path, report)
+            write_json(report_path, report)
             if report["status"] not in ("passed", "passed_with_warnings"):
                 raise RuntimeError(f"Reference validation failed; see {report_path}")
             row.update(status="validated_with_warnings" if report["status"] == "passed_with_warnings" else "validated",
                        validation_report=str(report_path), xml_files=report["xml_files"],
                        provider_xml_bytes=report["provider_xml_bytes"], total_xml_bytes=report["total_xml_bytes"],
                        combined_zip_bytes=compact.stat().st_size if compact is not None else 0,
-                       combined_zip_sha256=file_checksums(compact)[0] if compact is not None else None,
+                       combined_zip_sha256=sha256_file(compact) if compact is not None else None,
                        provider_reference_occurrences=report["provider_reference_occurrences"],
                        duplicate_id_version_occurrences=sum(report["duplicate_provider_id_version_pairs"].values()))
-            save_json(manifest_path, manifest)
+            write_json(manifest_path, manifest)
             if zip_only:
                 from pipeline.storage.zip_bronze import retain_snapshot
                 retain_snapshot(manifest_path, iso, apply=True, document=manifest)
             if remove_national:
                 raw.unlink()
                 row["national_removed"] = True
-                save_json(manifest_path, manifest)
+                write_json(manifest_path, manifest)
             print(f"  VALIDATED: {report['provider_xml_bytes'] / 1e9:.3f} GB provider XML; "
                   f"{report['provider_reference_occurrences']:,} refs; national ZIP "
                   f"{'removed' if remove_national else 'retained'}", flush=True)
@@ -341,14 +350,14 @@ def generate(providers, dates, output, remove_national=False, resume=False, xml_
         except Exception as exc:
             row.update(status="failed", error=f"{type(exc).__name__}: {exc}")
             manifest["status"] = "failed"
-            save_json(manifest_path, manifest)
+            write_json(manifest_path, manifest)
             raise
     manifest.update(status="complete_with_warnings" if any(r["status"] == "validated_with_warnings" for r in manifest["snapshots"]) else "complete",
-                    completed_at_utc=datetime.now(timezone.utc).isoformat(),
+                    completed_at_utc=utc_now(),
                     provider_xml_bytes=sum(r["provider_xml_bytes"] for r in manifest["snapshots"]),
                     total_xml_bytes=sum(r["total_xml_bytes"] for r in manifest["snapshots"]),
                     combined_zip_bytes=sum(r["combined_zip_bytes"] for r in manifest["snapshots"]))
-    save_json(manifest_path, manifest)
+    write_json(manifest_path, manifest)
     print(f"COMPLETE: {manifest_path}", flush=True)
     return manifest
 

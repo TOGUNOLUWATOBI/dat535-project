@@ -19,15 +19,13 @@ import urllib.error
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .download_entur_netex import download, file_checksums, make_url, source_metadata
-from .generate_provider_dataset import extract_snapshot, save_json, validate_snapshot
-
-
-def utc_now():
-    return datetime.now(timezone.utc).isoformat()
+from pipeline.common import sha256_file, utc_now, write_json
+from .download_entur_netex import download, make_url, source_metadata
+from .generate_provider_dataset import extract_snapshot, validate_snapshot
 
 
 def previous_source_day(now=None):
+    """Yesterday in Oslo: the newest export that is certain to be complete."""
     now = now or datetime.now(timezone.utc)
     return now.astimezone(ZoneInfo("Europe/Oslo")).date() - timedelta(days=1)
 
@@ -48,6 +46,11 @@ def retry_delay(error, attempt):
 
 
 def request_with_retries(operation, attempts, record_failure):
+    """Call ``operation(attempt)`` and retry transient network/HTTP errors with bounded backoff.
+
+    Every failure is passed to ``record_failure`` first, so the manifest keeps
+    a record of each attempt even when a later one succeeds.
+    """
     for attempt in range(1, attempts + 1):
         try:
             return operation(attempt)
@@ -92,7 +95,7 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
         "runner_name": os.environ.get("RUNNER_NAME"),
         "git_commit": os.environ.get("GITHUB_SHA"),
     }
-    save_json(manifest_path, manifest)
+    write_json(manifest_path, manifest)
 
     def record_failure(phase):
         def record(attempt, error):
@@ -100,19 +103,19 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
                 "phase": phase, "attempt": attempt, "at_utc": utc_now(),
                 "error": f"{type(error).__name__}: {error}",
             })
-            save_json(manifest_path, manifest)
+            write_json(manifest_path, manifest)
         return record
 
     try:
         key = day.strftime("%Y%m%d")
         print(f"Reading Entur source metadata for {day}", flush=True)
         identity = request_with_retries(lambda _: source_metadata(key), attempts, record_failure("metadata"))
-        save_json(metadata_dir / "source_metadata.json", identity)
+        write_json(metadata_dir / "source_metadata.json", identity)
         url = make_url(key) + "&generation=" + str(int(identity["generation"]))
         manifest.update(source_url=url, source_generation=identity["generation"],
                         source_md5_base64=identity["md5Hash"], source_bytes=int(identity["size"]),
                         source_created_at=identity.get("timeCreated"))
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         if check_only:
             manifest["status"] = "source_available"
         else:
@@ -123,7 +126,7 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
                 # because an earlier download left a .part file behind.
                 raw = output / "national" / f"attempt-{attempt:02d}" / f"netex_{key}.zip"
                 manifest["national_zip"] = str(raw.relative_to(output))
-                save_json(manifest_path, manifest)
+                write_json(manifest_path, manifest)
                 return download(url, raw, identity)
 
             manifest["source_sha256"] = request_with_retries(acquire, attempts, record_failure("download"))
@@ -136,16 +139,16 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
             lineage = extract_snapshot(raw, directory, compact, providers)
             for item in lineage:
                 item["xml_path"] = str(Path(item["xml_path"]).relative_to(output))
-            save_json(metadata_dir / "lineage.json", lineage)
+            write_json(metadata_dir / "lineage.json", lineage)
             print(f"Validating {len(lineage)} XML files and provider references", flush=True)
             report = validate_snapshot(directory, lineage, providers, day)
-            save_json(metadata_dir / "validation.json", report)
+            write_json(metadata_dir / "validation.json", report)
             if report["status"] not in ("passed", "passed_with_warnings"):
                 raise RuntimeError("Provider reference validation failed; see metadata/validation.json")
             manifest.update(
                 status="complete_with_warnings" if report["status"] == "passed_with_warnings" else "complete",
                 combined_zip=str(compact.relative_to(output)) if compact is not None else None,
-                combined_zip_sha256=file_checksums(compact)[0] if compact is not None else None,
+                combined_zip_sha256=sha256_file(compact) if compact is not None else None,
                 xml_directory=str(directory.relative_to(output)),
                 xml_files=report["xml_files"], provider_xml_bytes=report["provider_xml_bytes"],
                 total_xml_bytes=report["total_xml_bytes"],
@@ -156,7 +159,7 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
             manifest["ingestion_id"] = manifest["source_sha256"] + ":" + ",".join(sorted(providers))
             # The original XML, selected ZIP, source identity and validation
             # must be durable before an explicitly requested source cleanup.
-            save_json(manifest_path, manifest)
+            write_json(manifest_path, manifest)
             if zip_only:
                 from pipeline.storage.zip_bronze import retain_snapshot
                 retain_snapshot(manifest_path, apply=True, document=manifest)
@@ -164,12 +167,12 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
                 raw.unlink()
                 manifest.update(national_removed=True, national_removed_at_utc=utc_now())
         manifest["completed_at_utc"] = utc_now()
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         print(f"{manifest['status']}: {manifest_path}", flush=True)
         return manifest
     except Exception as error:
         manifest.update(status="failed", completed_at_utc=utc_now(), error=f"{type(error).__name__}: {error}")
-        save_json(manifest_path, manifest)
+        write_json(manifest_path, manifest)
         raise
 
 

@@ -1,2 +1,0 @@
-# Spark SQL's built-in XML reader; no separate spark-xml connector is needed.
-pyspark==4.2.0

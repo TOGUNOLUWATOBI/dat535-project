@@ -1,1 +1,1 @@
-"""NeTEx XML-to-Parquet staging, with further entity projections to follow."""
+"""Bronze to staging: source selection, explicit NeTEx schemas and Spark XML projection."""

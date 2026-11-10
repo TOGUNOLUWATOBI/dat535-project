@@ -1,11 +1,15 @@
-"""Planned-service metrics reconciled with validated Silver service dates."""
+"""Planned-service metrics reconciled with validated Silver service dates.
+
+Only valid, fixed (non-flexible) journey service dates are counted. Every
+excluded occurrence is kept in ``excluded_service_dates``, and the published
+departure total must equal the eligible Silver count before Gold completes.
+"""
 
 from datetime import date
 import json
 from pathlib import Path
 
-from pipeline.ingestion.generate_provider_dataset import save_json
-from pipeline.processing.bronze.xml_to_parquet import utc_now
+from pipeline.common import utc_now, write_json
 
 
 def build_gold(spark, silver, output, thresholds=None):
@@ -14,10 +18,12 @@ def build_gold(spark, silver, output, thresholds=None):
     from pipeline.quality.silver_profile import evaluate, profile_silver
     silver, output = Path(silver).resolve(), Path(output).resolve()
     source = json.loads((silver / "metadata/manifest.json").read_text())
-    if source.get("status") != "complete": raise ValueError("Gold requires complete validated Silver")
+    if source.get("status") != "complete":
+        raise ValueError("Gold requires complete validated Silver")
     if output.is_relative_to(silver) or silver.is_relative_to(output):
         raise ValueError("Gold output must be separate from Silver")
-    output.mkdir(parents=True, exist_ok=False); (output / "metadata").mkdir()
+    output.mkdir(parents=True, exist_ok=False)
+    (output / "metadata").mkdir()
     report = {"schema_version": 1, "layer": "gold", "status": "in_progress",
               "snapshot_date": source["snapshot_date"], "providers": source["providers"],
               "service_from": source["service_from"], "service_to": source["service_to"],
@@ -27,25 +33,33 @@ def build_gold(spark, silver, output, thresholds=None):
               "source_manifest": str(silver / "metadata/manifest.json"),
               "started_at_utc": utc_now(), "tables": {},
               "meaning": "Planned fixed timetable service as observed in this snapshot; no actual operations or ridership."}
-    path = output / "metadata/manifest.json"; save_json(path, report)
-    def read(name): return spark.read.parquet(str(silver / source["tables"][name]["path"]))
+    path = output / "metadata/manifest.json"
+    write_json(path, report)
+
+    def read(name):
+        return spark.read.parquet(str(silver / source["tables"][name]["path"]))
+
     def write(name, frame):
+        """Save a table, check its read-back count and record it in the manifest."""
         target = output / name
         expected = frame.count()
         frame.write.mode("errorifexists").option("compression", "snappy").parquet(str(target))
         saved = spark.read.parquet(str(target))
-        if saved.count() != expected: raise RuntimeError(f"{name}: read-back count mismatch")
+        if saved.count() != expected:
+            raise RuntimeError(f"{name}: read-back count mismatch")
         report["tables"][name] = {"path": name, "rows": expected, "schema": json.loads(saved.schema.json()),
             "parquet_bytes": sum(f.stat().st_size for f in target.glob("*.parquet"))}
-        save_json(path,report); print(f"gold/{name}: {expected:,} rows",flush=True)
+        write_json(path, report)
+        print(f"gold/{name}: {expected:,} rows", flush=True)
         return saved
+
     try:
         # Quality gate: profile Silver and stop before writing any table on "fail".
         profile = profile_silver(spark, silver)
-        save_json(output / "metadata/quality_profile.json", profile)
+        write_json(output / "metadata/quality_profile.json", profile)
         gate = evaluate(profile, thresholds)
         report["quality_gate"] = {k: gate[k] for k in ("status", "gate_version", "findings", "metrics")}
-        save_json(path, report)
+        write_json(path, report)
         if gate["status"] == "fail":
             failed = sorted({f"{f['provider']}:{f['rule']}" for f in gate["findings"] if f["level"] == "fail"})
             raise RuntimeError(f"Quality gate failed, Gold not published: {failed}")
@@ -57,9 +71,12 @@ def build_gold(spark, silver, output, thresholds=None):
             F.min("first_departure_seconds").alias("first_departure_seconds"),
             F.max("first_departure_seconds").alias("last_departure_seconds"))
         daily = daily.withColumn("departure_span_hours", (F.col("last_departure_seconds")-F.col("first_departure_seconds"))/3600)
-        daily = write("daily_line_service",daily)
-        reconciled = daily.agg(F.coalesce(F.sum("scheduled_departures"),F.lit(0)).alias("n")).first().n
-        if reconciled != eligible: raise RuntimeError("Gold departures do not reconcile to eligible Silver service dates")
+        daily = write("daily_line_service", daily)
+        reconciled = daily.agg(F.coalesce(F.sum("scheduled_departures"), F.lit(0)).alias("n")).first().n
+        if reconciled != eligible:
+            raise RuntimeError("Gold departures do not reconcile to eligible Silver service dates")
+        # Network totals cover every date and provider in the window. Dates inside a
+        # provider's source calendar with no service are 0; dates outside it stay null.
         days = (date.fromisoformat(source["service_to"])-date.fromisoformat(source["service_from"])).days+1
         coverage = source.get("source_calendar_coverage") or {
             p: {"from": source["service_from"], "to": source["service_to"]} for p in source["providers"]}
@@ -97,7 +114,9 @@ def build_gold(spark, silver, output, thresholds=None):
             "silver_service_occurrences":total,"eligible_fixed_service_occurrences":eligible,
             "excluded_service_occurrences":total-eligible,"gold_scheduled_departures":reconciled,
             "counts_match": True})
-        save_json(path,report); return report
+        write_json(path, report)
+        return report
     except Exception as error:
-        report.update(status="failed",completed_at_utc=utc_now(),error=f"{type(error).__name__}: {error}")
-        save_json(path,report); raise
+        report.update(status="failed", completed_at_utc=utc_now(), error=f"{type(error).__name__}: {error}")
+        write_json(path, report)
+        raise
