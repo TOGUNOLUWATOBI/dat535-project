@@ -48,8 +48,9 @@ bash scripts/rebuild_monthly.sh \
 
 The explicit removal option above applies only to newly downloaded national
 ZIPs after successful extraction and validation. Omit it to retain those ZIPs.
-Failed sources and extracted raw data are always kept. Allow storage for the
-additional selected XML, compact ZIPs and derived outputs; old outputs remain.
+Failed sources and extracted raw data are always kept. New calendar-support
+sources now use XML-only mode and create no compact ZIP. Allow storage for
+additional XML and derived outputs; old outputs remain. See [storage maintenance](storage_maintenance.md).
 
 The rebuild includes every existing registered primary snapshot, so older
 scheduled seven-day outputs are migrated as well. `--primary-manifest` also

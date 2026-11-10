@@ -73,7 +73,7 @@ class CombinedDatasetTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Historical mismatch in AKT_line.xml"):
             builder.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
 
-    def run_generation(self, missing=False):
+    def run_generation(self, missing=False, xml_only=False):
         fixture(self.source, missing=missing)
         output = self.root / "dataset"
         metadata = {"generation": "123", "md5Hash": "unique", "size": str(self.source.stat().st_size),
@@ -88,9 +88,9 @@ class CombinedDatasetTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             if missing:
                 with self.assertRaisesRegex(RuntimeError, "Reference validation failed"):
-                    builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True)
+                    builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True, xml_only=xml_only)
             else:
-                builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True)
+                builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True, xml_only=xml_only)
         return output, json.loads((output / "manifest.json").read_text())
 
     def test_cleanup_only_after_success_and_outputs_are_preserved(self):
@@ -103,6 +103,35 @@ class CombinedDatasetTests(unittest.TestCase):
         self.assertTrue((Path(row["xml_directory"]) / "AKT_line.xml").exists())
         with self.assertRaises(FileExistsError):
             builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output)
+
+    def test_xml_only_success_has_no_zips_and_resume_verifies_xml(self):
+        output,manifest=self.run_generation(xml_only=True)
+        row=manifest['snapshots'][0]
+        self.assertTrue(manifest['xml_only']);self.assertIsNone(row['combined_zip'])
+        self.assertEqual(list(output.rglob('*.zip')),[])
+        with zipfile.ZipFile(self.source) as original:
+            for raw in Path(row['xml_directory']).glob('*.xml'):
+                self.assertEqual(raw.read_bytes(),original.read(raw.name))
+        with patch.object(builder,'download',side_effect=AssertionError('should not download again')):
+            builder.generate(['KOL','AKT'],[date(2026,1,15)],output,resume=True)
+        raw=Path(row['xml_directory'])/'AKT_line.xml';raw.write_text('changed')
+        with self.assertRaisesRegex(RuntimeError,'does not match'):
+            builder.generate(['KOL','AKT'],[date(2026,1,15)],output,resume=True)
+
+    def test_existing_dataset_resumes_after_verified_provider_zip_cleanup(self):
+        from pipeline.bronze_storage import discard_provider_zips
+        output,_=self.run_generation()
+        report=discard_provider_zips(output,apply=True)
+        self.assertEqual(report['zip_copies'],1)
+        with patch.object(builder,'download',side_effect=AssertionError('must reuse raw XML')):
+            builder.generate(['KOL','AKT'],[date(2026,1,15)],output,resume=True)
+
+    def test_xml_only_failure_still_preserves_the_failed_national_source(self):
+        _,manifest=self.run_generation(missing=True,xml_only=True)
+        row=manifest['snapshots'][0]
+        self.assertTrue(Path(row['national_zip']).exists())
+        self.assertTrue(Path(row['xml_directory']).exists())
+        self.assertIsNone(row['combined_zip'])
 
     def test_validation_failure_preserves_national_source(self):
         _, manifest = self.run_generation(missing=True)

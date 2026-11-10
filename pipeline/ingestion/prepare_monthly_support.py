@@ -76,7 +76,7 @@ def prepare(root, first_month, last_month, providers, remove_national=False, exc
                     output = root / "additional" / str(day)
                     if output.exists():
                         raise RuntimeError("Earlier failed attempt retained; choosing another source")
-                    generate(providers, [day], output, remove_national=remove_national)
+                    generate(providers, [day], output, remove_national=remove_national, xml_only=True)
                     manifest = output / "manifest.json"
                 if not covers_month(manifest, day, first, last, providers):
                     raise ValueError("Source validity does not cover the entire requested month")

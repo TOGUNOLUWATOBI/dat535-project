@@ -46,6 +46,16 @@ class ScheduledIngestionTests(unittest.TestCase):
         response.status = 200
         return response
 
+    def test_xml_only_cleanup_keeps_exact_xml_without_either_zip_copy(self):
+        with patch('urllib.request.urlopen',side_effect=lambda *a,**k:self.http_response()):
+            result=poller.ingest_snapshot(self.day,self.output,remove_national_after_validation=True,xml_only=True)
+        self.assertIn(result['status'],('complete','complete_with_warnings'))
+        self.assertIsNone(result['combined_zip'])
+        self.assertEqual(list(self.output.rglob('*.zip')),[])
+        with zipfile.ZipFile(self.source) as original:
+            for raw in (self.output/result['xml_directory']).glob('*.xml'):
+                self.assertEqual(raw.read_bytes(),original.read(raw.name))
+
     def test_success_keeps_originals_pins_generation_and_writes_portable_lineage(self):
         with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule", "RUNNER_NAME": "dat535-spark"}), \
                 patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()) as request:

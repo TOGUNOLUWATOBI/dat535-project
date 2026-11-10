@@ -1,8 +1,8 @@
 """Collect one new KOL + AKT archive snapshot, locally or from GitHub Actions.
 
 The default source date is yesterday in Europe/Oslo. Each execution gets a new
-output directory. Selected XML and failed downloads are preserved. The optional
-cleanup flag removes the national ZIP only after extraction and validation pass.
+output directory. Selected XML and failed downloads are preserved. XML-only mode
+avoids a compact ZIP; the cleanup flag removes the national ZIP after validation.
 """
 
 import argparse
@@ -64,7 +64,7 @@ def request_with_retries(operation, attempts, record_failure):
 
 
 def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_only=False,
-                    remove_national_after_validation=False):
+                    remove_national_after_validation=False, xml_only=False):
     """Acquire, filter and validate a single source without changing older data."""
     providers = list(dict.fromkeys(p.upper() for p in providers))
     if not providers or any(not re.fullmatch(r"[A-Z]{3}", p) for p in providers):
@@ -81,7 +81,7 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
     manifest = {
         "status": "running", "started_at_utc": utc_now(),
         "snapshot_date": day.isoformat(), "providers": providers,
-        "check_only": check_only, "request_failures": [],
+        "check_only": check_only, "request_failures": [], "xml_only": xml_only,
         "national_removed": False,
         "remove_national_after_validation": remove_national_after_validation,
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
@@ -127,8 +127,9 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
             manifest["source_sha256"] = request_with_retries(acquire, attempts, record_failure("download"))
             raw = output / manifest["national_zip"]
             directory = output / "xml" / day.isoformat()
-            compact = output / "zip" / f"{'_'.join(providers)}_netex_{key}.zip"
-            compact.parent.mkdir()
+            compact = None if xml_only else output / "zip" / f"{'_'.join(providers)}_netex_{key}.zip"
+            if compact is not None:
+                compact.parent.mkdir()
             print("Extracting original provider XML and national stops", flush=True)
             lineage = extract_snapshot(raw, directory, compact, providers)
             for item in lineage:
@@ -141,8 +142,8 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
                 raise RuntimeError("Provider reference validation failed; see metadata/validation.json")
             manifest.update(
                 status="complete_with_warnings" if report["status"] == "passed_with_warnings" else "complete",
-                combined_zip=str(compact.relative_to(output)),
-                combined_zip_sha256=file_checksums(compact)[0],
+                combined_zip=str(compact.relative_to(output)) if compact is not None else None,
+                combined_zip_sha256=file_checksums(compact)[0] if compact is not None else None,
                 xml_directory=str(directory.relative_to(output)),
                 xml_files=report["xml_files"], provider_xml_bytes=report["provider_xml_bytes"],
                 total_xml_bytes=report["total_xml_bytes"],
@@ -176,13 +177,14 @@ def main():
     parser.add_argument("--check-only", action="store_true", help="Check source metadata without downloading the national ZIP")
     parser.add_argument("--remove-national-after-validation", action="store_true",
                         help="Remove the fetched national ZIP only after successful extraction and validation")
+    parser.add_argument("--xml-only", action="store_true", help="Keep XML without creating a compact provider ZIP")
     args = parser.parse_args()
     day = args.date or previous_source_day()
     run_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
     output = args.output or Path("data/bronze/entur") / run_name
     try:
         ingest_snapshot(day, output, args.providers, args.attempts, args.check_only,
-                        args.remove_national_after_validation)
+                        args.remove_national_after_validation, args.xml_only)
     except Exception as error:
         print(f"Ingestion failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 1

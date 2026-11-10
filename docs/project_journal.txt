@@ -948,3 +948,31 @@ records progress and can reuse compatible completed checkpoints; it also
 refuses to call the rebuild complete if the date coverage audit has gaps.
 This was a local rebuild. The forwarded school-server GUI still needs the
 new code and its own rebuild; we have not used the expired SSH access window.
+
+
+10 November 2026 - Storage again: the XML copies were much bigger than the ZIPs
+
+The server had 4.9 GiB free on a 38 GiB disk. Bronze used 20 GiB, while the 23
+ZIPs together used 1.37 GiB. The large repetition was extracted XML: several
+runs for the same November dates each had about 0.8 GiB of it. Removing just
+national ZIPs was not enough. Compact ZIP copies were also still being kept.
+
+We added a dry-run storage command that checks completed inputs against their
+lineage hashes, then can consolidate identical copies with hardlinks. Every
+path and its raw bytes remain, so references and checkpoint identities still
+work. It skips failed/running snapshots and corrupted files. An explicit option
+can discard compact provider ZIPs after verifying every XML hash and ZIP CRC;
+metadata records XML-only retention so resuming does not demand a removed ZIP.
+Original manual uploads stay protected.
+
+Scheduled and new monthly-support ingestion now keep XML without creating a
+compact ZIP. Successful national downloads are still removed after validation;
+failed downloads remain evidence. The scheduled workflow also consolidates
+verified duplicate storage. This addresses repeated same-source runs, rather
+than assuming each push contains a new dataset.
+
+Both runner services were active: DAT535 and the old Group04 project. The user
+chose Group04 for removal. We must stop/uninstall that exact service and keep
+its _work until unique data is checked. Both observed VS Code server versions
+were also active, so deleting their directories blindly would be wrong.
+The cleanup tool is prepared locally; no server files have been deleted by us.
