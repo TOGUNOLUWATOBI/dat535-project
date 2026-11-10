@@ -89,14 +89,50 @@ jobs:
           fi
           python3 -u -m pipeline.ingestion.poll_entur_netex "${args[@]}"
 
+      - name: Run Spark transformation tests
+        id: spark_tests
+        if: steps.ingest.outcome == 'success' && inputs.check_only != true
+        run: bash scripts/run_tests.sh
+
       - name: Process validated snapshot through Silver and Gold
         id: process
-        if: steps.ingest.outcome == 'success' && inputs.check_only != true
+        if: steps.spark_tests.outcome == 'success'
         shell: bash
         run: |
           bash scripts/run_processing.sh \
             --manifest "$INGESTION_OUTPUT/metadata/manifest.json" \
             --data-root "$DAT535_DATA_ROOT"
+
+      - name: Update route history across all processed snapshots
+        id: history
+        if: steps.process.outcome == 'success'
+        shell: bash
+        run: |
+          bash scripts/run_route_history.sh --data-root "$DAT535_DATA_ROOT"
+
+      - name: Save route-history checks and summary
+        if: always() && (steps.history.outcome == 'success' || steps.history.outcome == 'failure')
+        env:
+          HISTORY_OUTCOME: ${{ steps.history.outcome }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['DAT535_DATA_ROOT']) / 'gold' / 'entur' / 'history'
+          runs = sorted(root.glob('*/history-*/metadata/manifest.json'), key=lambda p: p.stat().st_mtime)
+          if not runs:
+              raise SystemExit('No route-history output found')
+          manifest = json.loads(runs[-1].read_text())
+          keep = ('status', 'error', 'identity', 'started_at_utc', 'completed_at_utc', 'meaning',
+                  'renumbering_mappings', 'discontinuations', 'checks', 'summary')
+          # The newest output may predate this run if the step failed before writing one.
+          report = {'step_outcome': os.environ['HISTORY_OUTCOME'], 'path': str(runs[-1].parent.parent),
+                    **{k: manifest.get(k) for k in keep}}
+          target = Path(os.environ['INGESTION_OUTPUT']) / 'metadata' / 'route_history.json'
+          target.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
+          print(f"route history {report['status']}: {report['path']}")
+          PY
 
       - name: Save processing checkpoint report
         if: always() && (steps.process.outcome == 'success' || steps.process.outcome == 'failure')

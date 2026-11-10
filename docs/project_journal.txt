@@ -719,3 +719,110 @@ winter holiday in week 8: only weekdays 16-20 February drop (about 25%),
 while weekends equal January and March. AKT's T-suffixed bus numbers lose
 the T on continuing lines with unchanged stops; we found no source for what
 the T means, so we only record that they are label changes.
+
+9 November 2026 - Review follow-up: observation semantics, evidence and scope
+
+Tobi's readiness review raised four problems in the route history. We changed
+the code for each.
+
+Observation, not effect. A snapshot shows what was published on that date,
+not when a change took effect. Versions now carry first_observed,
+last_observed, previous_snapshot and first_not_observed instead of
+valid_from. A line missing from the next export is "disappeared". It is only
+called renumbered or discontinued when a verified source covers that exact
+transition (line_transitions.interpretation); otherwise it stays
+not_observed.
+
+Two stop measures. Route structure still uses the stops in published journey
+patterns. Service now uses the stops served by fixed journeys that operate
+inside the Gold window, the same scope as the departure totals. The two give
+very different answers: in the February holiday week about 1,470 AKT stops
+had no departure (only 116 of 212 AKT lines ran), and in July about 1,550 AKT
+and 870 Kolumbus stops. The pattern measure had shown 1 and 70. The stops
+that drop out are mostly on AKT's school routes (19xx/23xx).
+
+Strict evidence. The mapping reader treated a missing or string "false"
+verified field as verified. Evidence entries are now validated: verified must
+be a JSON boolean (false when missing), a verified entry needs verified_by,
+source_url, note and to_snapshot, from_snapshot is enforced when given, and
+unknown fields, foreign IDs, bad dates and duplicates are refused. A verified
+entry that does not match the data now fails the run. We also fixed a bug
+where a mapping for the wrong transition removed the candidate row instead of
+leaving it unverified. Discontinuations have their own evidence file.
+
+Modes. The data includes boats: 44,534 of the 521,185 window departures
+(about 6% of AKT's and 10% of Kolumbus' departures). Totals are now reported
+as all modes, with bus-only columns and a per-mode network table, so they are
+no longer called bus departures.
+
+Re-reading the AKT and Kolumbus notices verified more July changes: AKT
+54 to 32, the new IDs of Kristiansand lines 19, 30, 31, 32 and 35, the
+discontinued N110 night trip (its only departure, 02:45 Sunday), Kolumbus X77
+to 43, 46 to SK0203, and the end of route 67 and boat route 704. That gives
+16 verified renumberings and 4 verified discontinuations, all matched. 24
+disappearances across all transitions remain unexplained and are reported
+only as no longer published.
+
+The first scheduled snapshot (8 November) was processed by the main workflow
+and is now included: ten snapshots, 521,185 departures, all checks passed.
+The workflow change on this branch adds the Spark test suite before
+processing and route history after it, and saves the history checks with the
+run report. 76 tests pass on the server. The draft project definition
+(docs/project_definition.md) records the scope and meanings above and the
+decisions the team still has to agree.
+
+9 November 2026 - Quality evidence and a publication gate (review point 4)
+
+Zero quarantine said only that nothing broke our rules. We added a quality
+profile for every Silver output (pipeline/quality/silver_profile.py): before
+and after volumes, duplicates collapsed, essential and optional fields
+missing, unresolved and ambiguous references, invalid and overnight times,
+calendar issues, and accepted, excluded and rejected service. Gold now
+profiles its Silver input first and applies config/quality_thresholds.json:
+any rejection warns, and more than 1% rejected, any ambiguous reference, or no
+accepted service for a provider stops Gold. Before this, Gold would reconcile
+perfectly with whatever survived Silver. The updated pipeline test shows the
+gate stopping Gold when half of AKT's journeys are broken.
+
+The profile of all ten snapshots changed one rule before we used it.
+ServiceJourney.DepartureTime is empty for almost every journey, because the
+Nordic profile puts times on the passing times, so it is optional, not
+essential. All ten snapshots pass. Nothing was rejected, collapsed or
+unresolved, so Silver's role here is resolution and derivation, not cleaning.
+The evidence shows substantial overnight service (up to 52,210 Kolumbus
+passing times after midnight in one snapshot), many valid journeys that do not
+run in the window, and flexible service that is excluded, not lost. The
+table is in docs/quality_report.md.
+
+We also traced four real February journeys from the source XML, read with the
+Python standard library only, to Silver and Gold: an ordinary journey, an
+overnight journey, a journey whose calendar marks Friday 20 February as not
+available, and a flexible journey. Passing times, operating dates and Gold's
+treatment matched in every case (docs/quality_traces.md, docs/data_quality.md).
+
+
+10 November 2026 - Provider completeness and independent source checks
+
+We worked on two gaps from the review. The quality gate used to discover its
+providers from whatever rows were left, so an empty profile could pass. It now
+compares the manifest selection with the providers in Silver and checks the
+staging/Silver occurrence counts for each provider. Missing providers cannot be
+allowed through by relaxing the zero-service rule. Calendar impact is counted
+from journeys before dates are expanded, since broken calendars can otherwise
+leave no rows to count.
+
+The traces now follow the stop references in the XML all the way to a quay and
+national stop place, or a flexible stop place. They also compare the earliest
+and latest flexible times separately. We added a whole-line recount from every
+original journey occurrence, including repeated IDs in different XML files.
+The useful failure test moves another journey's date in both Silver and Gold:
+they still agree with each other, but the XML recount catches the mistake.
+
+The older local January Parquet did not have the current flexible fields. We
+left it alone and regenerated January into temporary storage from the raw XML.
+The full run passed gate version 2: 25,289 journeys, 768,701 passing times,
+53,322 fixed departures and 23 flexible occurrences excluded. All four real
+trace cases passed, including physical stops, calendar exceptions and flexible
+windows. The temporary processing files were removed afterwards; only the
+small evidence reports were kept. This is local verification, not a server
+deployment or a new verification of the other nine snapshots.

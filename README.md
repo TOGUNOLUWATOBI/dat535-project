@@ -12,7 +12,7 @@ pipeline/                 Python code
   processing/             XML-to-Parquet staging; planned Silver and Gold processing
   storage/                Planned database publication
   analysis/               Route history across snapshots (docs/route_history.md)
-app/                      Planned Streamlit GUI
+app/                      Streamlit Gold explorer (bash scripts/run_gui.sh)
 config/                   Configuration conventions
 scripts/                  Operational notes and future deployment helpers
 tests/ingestion/          Acquisition and generation tests

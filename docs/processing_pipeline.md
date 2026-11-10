@@ -130,7 +130,15 @@ coverage for eligible journeys and excluded service-date records. Summary
 averages divide by all calendar days in the declared window, including days
 without service. Daily departure totals must equal eligible fixed-service
 occurrences in Silver. Metrics describe planned timetables, not observed
-operations, ridership or delays. Historical change/SCD tables remain to build.
+operations, ridership or delays. Historical change and SCD tables are in
+[route history](route_history.md).
+
+Gold publishes only if its Silver input passes the quality gate
+(`config/quality_thresholds.json`): any rejection warns, and more than 1%
+rejected journeys, passing times or service occurrences, any ambiguous
+reference, or no accepted service for a provider stops publication. The
+profile and gate decision are saved with each Gold output. See
+[data quality](data_quality.md).
 
 Tests cover source damage, underscore-prefixed reference files, repeated IDs in
 different files, reference versions, leading-zero public codes, calendar

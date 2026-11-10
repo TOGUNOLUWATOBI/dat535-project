@@ -1,0 +1,130 @@
+"""Read-only access to published Gold and route-history outputs for the GUI.
+
+Only completed, registered checkpoints are read: the newest complete Gold per
+snapshot from the checkpoint registry, and the newest complete route history.
+Nothing here writes to the data root. Pandas reads the small Gold Parquet tables
+directly, so the GUI needs no Spark session.
+"""
+
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from pipeline.analysis.inspect_history import latest_history
+from pipeline.analysis.route_history import find_inputs
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def snapshots(data_root):
+    """One dict per snapshot: dates, Gold/Silver paths and the Gold manifest."""
+    items = find_inputs(Path(data_root) / "pipeline_state.sqlite3", verify=False)
+    for item in items:
+        item["gold_manifest"] = json.loads((Path(item["gold"]) / "metadata/manifest.json").read_text())
+    return items
+
+
+def gold_table(items, name):
+    """A Gold table for every snapshot, with ``snapshot_date`` set."""
+    frames = []
+    for item in items:
+        table = item["gold_manifest"]["tables"].get(name)
+        if table:
+            frame = pd.read_parquet(Path(item["gold"]) / table["path"])
+            frame["snapshot_date"] = item["snapshot_date"]
+            frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def gate_status(manifest):
+    """Quality-gate result recorded in a Gold manifest (older outputs predate the gate)."""
+    gate = manifest.get("quality_gate")
+    if not gate:
+        return "not recorded"
+    rules = sorted({f["rule"] for f in gate.get("findings", [])})
+    return gate["status"] + (f" ({', '.join(rules)})" if rules else "")
+
+
+def overview(items):
+    """Per snapshot and provider: departures by mode, lines and the quality gate."""
+    rows = []
+    summary = gold_table(items, "line_window_summary")
+    for item in items:
+        part = summary[summary.snapshot_date == item["snapshot_date"]]
+        recon = item["gold_manifest"].get("reconciliation", {})
+        for provider, group in part.groupby("provider"):
+            rows.append({
+                "snapshot": item["snapshot_date"], "window": f"{item['service_from']} – {item['service_to']}",
+                "provider": provider, "lines with service": group.line_entity_id.nunique(),
+                "departures": int(group.scheduled_departures.sum()),
+                "bus": int(group[group.line_transport_mode == "bus"].scheduled_departures.sum()),
+                "water": int(group[group.line_transport_mode == "water"].scheduled_departures.sum()),
+                "excluded occurrences (snapshot)": recon.get("excluded_service_occurrences"),
+                "quality gate": gate_status(item["gold_manifest"])})
+    return pd.DataFrame(rows)
+
+
+class History:
+    """The newest complete route-history output."""
+
+    def __init__(self, data_root):
+        self.path, self.manifest = latest_history(data_root)
+
+    def table(self, name):
+        return pd.read_parquet(self.path / name)
+
+    def stop_names(self):
+        coverage = self.table("stop_coverage")[["stop_id", "stop_name"]].dropna()
+        return dict(zip(coverage.stop_id, coverage.stop_name))
+
+
+def month(snapshot):
+    """'2026-07-15' -> 'Jul 2026'."""
+    return pd.Timestamp(snapshot).strftime("%b %Y")
+
+
+def line_catalog(line_snapshots):
+    """One row per line ID with a readable label: number, route name and, when needed, period.
+
+    The period is added when the line was not published in every snapshot, so that
+    two IDs with the same number (e.g. bus 55 before and after June 2026) can be told apart.
+    """
+    snaps = line_snapshots.sort_values("snapshot_date")
+    all_dates = sorted(snaps.snapshot_date.unique())
+    rows = []
+    for (provider, line_id), group in snaps.groupby(["provider", "line_id"], sort=False):
+        last = group.iloc[-1]
+        first_seen, last_seen = group.snapshot_date.iloc[0], group.snapshot_date.iloc[-1]
+        code = last.public_code or "?"
+        mode = "boat" if last.transport_mode == "water" else last.transport_mode or "bus"
+        name = (last["name"] or "").replace(" - ", " – ")
+        period = ""
+        if first_seen != all_dates[0] or last_seen != all_dates[-1]:
+            period = f"{month(first_seen)} – {month(last_seen)}" if first_seen != last_seen else month(first_seen)
+        label = f"{code} {name}".strip() + (f"  ({period})" if period else "")
+        rows.append({"provider": provider, "line_id": line_id, "number": code, "route": name, "mode": mode,
+                     "first_observed": first_seen, "last_observed": last_seen, "period": period, "label": label})
+    catalog = pd.DataFrame(rows)
+    # Natural sort by number: 2 before 10, letters and codes after digits.
+    key = catalog.number.str.extract(r"^(\d+)")[0].astype(float)
+    return catalog.assign(_n=key.fillna(1e9)).sort_values(["provider", "_n", "number", "first_observed"]) \
+        .drop(columns="_n").reset_index(drop=True)
+
+
+def evidence():
+    """Verified renumberings and discontinuations, keyed for joining with transitions."""
+    def load(name):
+        path = REPO / "config" / name
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+    renumberings = pd.DataFrame(load("route_renumberings.json"))
+    discontinuations = pd.DataFrame(load("route_discontinuations.json"))
+    return renumberings, discontinuations
+
+
+def clock(seconds):
+    """Seconds after the operating day's midnight as HH:MM (with +1d after midnight)."""
+    if seconds is None or pd.isna(seconds):
+        return "–"
+    day, rest = divmod(int(seconds), 86400)
+    return f"{rest // 3600:02d}:{rest % 3600 // 60:02d}" + (f" +{day}d" if day else "")

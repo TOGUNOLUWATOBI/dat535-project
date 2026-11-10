@@ -8,8 +8,10 @@ from pipeline.ingestion.generate_provider_dataset import save_json
 from pipeline.processing.bronze.xml_to_parquet import utc_now
 
 
-def build_gold(spark, silver, output):
+def build_gold(spark, silver, output, thresholds=None):
+    """Publish Gold only if the Silver input passes the quality gate (warn still publishes)."""
     from pyspark.sql import functions as F
+    from pipeline.quality.silver_profile import evaluate, profile_silver
     silver, output = Path(silver).resolve(), Path(output).resolve()
     source = json.loads((silver / "metadata/manifest.json").read_text())
     if source.get("status") != "complete": raise ValueError("Gold requires complete validated Silver")
@@ -35,6 +37,15 @@ def build_gold(spark, silver, output):
         save_json(path,report); print(f"gold/{name}: {expected:,} rows",flush=True)
         return saved
     try:
+        # Quality gate: profile Silver and stop before writing any table on "fail".
+        profile = profile_silver(spark, silver)
+        save_json(output / "metadata/quality_profile.json", profile)
+        gate = evaluate(profile, thresholds)
+        report["quality_gate"] = {k: gate[k] for k in ("status", "gate_version", "findings", "metrics")}
+        save_json(path, report)
+        if gate["status"] == "fail":
+            failed = sorted({f"{f['provider']}:{f['rule']}" for f in gate["findings"] if f["level"] == "fail"})
+            raise RuntimeError(f"Quality gate failed, Gold not published: {failed}")
         dates = read("journey_service_dates")
         valid = dates.where("is_valid AND NOT is_flexible")
         total, eligible = dates.count(), valid.count()

@@ -1,0 +1,6 @@
+# Streamlit Gold explorer (app/). Install in a separate environment from PySpark:
+#   python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements-gui.txt
+streamlit==1.45.1
+pandas==2.3.3
+pyarrow==26.0.1
+altair==5.5.0
