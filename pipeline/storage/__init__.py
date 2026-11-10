@@ -1,1 +1,1 @@
-"""Planned database storage and publication."""
+"""Bronze storage helpers; database publication remains separate."""

@@ -1,66 +1,113 @@
 # Server storage maintenance
 
-The server report on 10 November showed a 38 GiB root disk with 4.9 GiB free.
-Bronze used 20 GiB; staging, Silver and Gold together used about 1.3 GiB.
-The 23 remaining ZIP files totalled 1.37 GiB. Repeated 8/9 November runs had
-roughly 0.8 GiB of extracted XML each. ZIP removal alone cannot solve that growth.
+## Current policy: selected-provider ZIPs
 
-## Verify and consolidate duplicate inputs
+The school VM has a 38 GiB root disk. After preparing full-month calendar
+support, the server reported 23 GiB in Bronze and 3.5 GiB free. Successful
+national ZIP removal was working; permanently extracted XML was the main cost.
+The user approved moving existing validated snapshots to compressed ZIP storage.
 
-Run from the checked-out project. These commands require no Spark session:
+Keep each snapshot's selected KOL + AKT XML and national stops inside a compact
+ZIP. Keep manifests, source identity, lineage and validation reports beside it.
+ZIP compression preserves the exact original XML bytes and NeTEx references.
+Staging, Silver, Gold and the checkpoint registry remain local and unchanged by
+the migration. National archives include other providers and are a separate
+retention decision; original manual uploads are never deleted by this tool.
+
+## Migrate existing XML without downloading again
+
+Use the branch containing ZIP storage support, and let existing ingestion and
+processing jobs finish before migration. Old checkouts do not know how to restore
+ZIP-backed XML. Do not delete entire run folders or manually change their manifests.
+
+Preview (no XML or manifests changed):
 
 ```bash
-python3 -B -u -m pipeline.bronze_storage \
-  --bronze-root /srv/dat535/data/bronze/entur \
-  --discard-provider-zips --report /tmp/dat535-storage-preview.json
+cd ~/dat535-project
+python3 -B -u -m pipeline.storage.zip_bronze \
+  --bronze-root /srv/dat535/data/bronze/entur
 ```
 
-The default is a dry run. It reads completed ingestion manifests and lineage,
-groups expected identical files, then verifies their SHA-256 hashes. Running
-and failed snapshots are excluded. Only identical files on the same filesystem
-with matching ownership and permissions are consolidated. Every raw XML path
-and its bytes remain; duplicate paths share storage through hardlinks. Existing
-source references and checkpoint hashes remain valid. Inputs must stay immutable.
-
-After reviewing the estimate, apply the same verified cleanup:
+Apply the approved format migration:
 
 ```bash
-python3 -B -u -m pipeline.bronze_storage \
-  --bronze-root /srv/dat535/data/bronze/entur \
-  --discard-provider-zips --apply \
-  --report /srv/dat535/data/metadata/storage-cleanup.json
+python3 -B -u -m pipeline.storage.zip_bronze \
+  --bronze-root /srv/dat535/data/bronze/entur --apply \
+  --report /srv/dat535/data/metadata/zip-migration-1.json
 
 df -h /srv/dat535/data
 ```
 
-Provider ZIP copies are discarded only after their recorded ZIP checksum,
-member CRCs and every extracted XML checksum match. The manifest records
-XML-only retention before removing the copy. Historical resume verifies XML
-in that mode; it does not require an intentionally discarded compact ZIP.
-Manual uploads and their archives are excluded from ZIP removal. Damaged,
-failed and incomplete inputs are left intact and reported.
+Use a new report filename on another invocation. The report records each source
+manifest, date, logical XML bytes, retained ZIP bytes, skipped snapshots and
+problems. Logical byte totals are not estimates of physical disk savings:
+hardlinks may share storage. Use `df` to measure available space afterwards.
 
-Do not delete entire ingestion runs: the registry and lineage may reference
-their paths. Do not remove `pipeline_state.sqlite3`, current Parquet outputs,
-or active runner/VS Code installations to make room.
+For each complete, validated snapshot, the tool:
 
-## Prevent repeat copies
+1. Checks its passed validation report and every XML size and SHA-256 against
+   the original lineage. Unexpected files, unsafe paths or changed XML block cleanup.
+2. Builds a selected ZIP, or verifies a retained one. Checks the exact member
+   set, sizes, CRCs and every decompressed XML SHA-256. It processes one snapshot
+   at a time, rather than building all ZIPs before releasing any XML.
+3. Saves a manifest backup under `storage_backups/`, then durably records
+   `raw_storage="zip"`, `combined_zip`, its SHA-256 and compressed size.
+4. Unlinks only that snapshot's known, verified XML files. Shared hardlinks in
+   other snapshots remain intact. Checkpoints and derived outputs are untouched.
 
-Scheduled ingestion now uses `--xml-only --remove-national-after-validation`:
-the national ZIP is temporary, no compact provider ZIP is created, and the
-original selected XML remains. Failed national downloads are retained as
-evidence. The workflow consolidates verified duplicate Bronze files after
-successful ingestion and saves a report with the run metadata.
+Failed/incomplete snapshots and their evidence remain. The failed February
+source therefore still occupies storage; this tool does not silently discard it.
+A problem with one manifest is reported and causes a nonzero exit status.
+Already migrated snapshots are verified on a rerun. A ZIP published immediately
+before an interruption can be adopted only after a full lineage match.
 
-New monthly support datasets also use XML-only mode. A historical dataset can
-explicitly opt into it with `generate_provider_dataset --xml-only`. Existing
-retention choices are respected on resume; use the verified cleanup above for
-older compact copies.
+## Processing and recovery
 
-The two runner services on this server were both active. The user selected
-the Group04 runner for decommissioning; its installation is
-`/home/ubuntu/actions-runner/actions-runner`. Stop/uninstall only its exact
-service and preserve `_work` until any unique project data has been checked.
-The DAT535 runner under `/home/ubuntu/dat535-runner` must remain. Both observed
-VS Code server versions were in use, so their directories are not blanket
-cleanup targets.
+`run_snapshot`, standalone XML conversion, calendar support checks, manual-import
+duplicate verification and independent journey tracing understand ZIP storage.
+They verify the ZIP and restore XML to its original paths under an exclusive
+snapshot lock. All source paths, dates, IDs, references and content fingerprints
+stay the same. Nested processing uses the same extraction.
+
+The extraction remains until that snapshot's operation finishes. On success or
+a Python exception, cleanup rechecks the archive and XML before releasing the
+expanded copy. The ZIP remains authoritative even if Spark fails. A hard kill
+can leave expanded XML; a later run verifies it and recovers. Changed cache files
+or a damaged archive are preserved and reported, not silently removed.
+
+Allow space for one full snapshot plus at least 1 GiB headroom before extraction;
+Spark and new outputs may require additional space. The existing processing
+checkpoints still verify completed Parquet outputs before reuse. Updated reader
+code can require a new staging implementation and downstream attempts once;
+the storage migration itself keeps the source fingerprint unchanged. Source hashes
+are validated even when every stage can be reused. GUI and route-history reads
+of existing Gold do not need raw XML extraction.
+
+Low-level `load_sources`/`load_snapshot_sources` callers that read XML directly
+must hold `pipeline.storage.zip_bronze.snapshot_xml(manifest, date)` around their
+whole operation. Public processing entry points do this automatically.
+
+## New ingestion
+
+The scheduled workflow now supplies `--zip-only --remove-national-after-validation`.
+Calendar-support acquisitions use the same retention policy. Successful national
+downloads are removed only after selected data validation and ZIP verification;
+failed sources remain. Both historical generation and polling expose `--zip-only`.
+Manual upload also accepts `--zip-only` and continues to preserve the original upload.
+The Python APIs retain their old expanded defaults for existing callers.
+
+Merge the workflow change to the default branch to update scheduled jobs. Pulling
+the branch in `~/dat535-project` updates manual commands, not the Actions checkout.
+
+## Previous XML-only cleanup
+
+`pipeline.bronze_storage` remains available for checksum-verified hardlink
+consolidation of expanded datasets. Its `--discard-provider-zips` option only
+applies to redundant ZIP copies: it explicitly refuses to discard an archive
+marked `raw_storage="zip"`. Do not use an older version of that command after
+migration; it lacks that protection. ZIP retention supersedes the earlier
+XML-only policy for the school server.
+
+The Group04 runner was stopped/uninstalled by the user and its binary/update
+packages removed. The DAT535 runner under `/home/ubuntu/dat535-runner`, its service,
+and active VS Code server installations remain required.

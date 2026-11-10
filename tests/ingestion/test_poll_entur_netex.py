@@ -129,6 +129,21 @@ class ScheduledIngestionTests(unittest.TestCase):
         self.assertEqual(self.manifest()["status"], "failed")
         self.assertEqual(len(self.manifest()["request_failures"]), 3)
 
+    def test_zip_only_poll_keeps_original_members_without_permanent_xml(self):
+        from pipeline.storage.zip_bronze import snapshot_xml
+        with patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()):
+            result = poller.ingest_snapshot(self.day, self.output, remove_national_after_validation=True, zip_only=True)
+        self.assertEqual(result["raw_storage"], "zip")
+        xml = self.output / result["xml_directory"]
+        self.assertFalse(xml.exists())
+        self.assertFalse((self.output / result["national_zip"]).exists())
+        with zipfile.ZipFile(self.source) as source, zipfile.ZipFile(self.output / result["combined_zip"]) as saved:
+            for member in saved.namelist():
+                self.assertEqual(saved.read(member), source.read(member))
+        with snapshot_xml(self.output / "metadata/manifest.json"):
+            self.assertTrue(xml.exists())
+        self.assertFalse(xml.exists())
+
     def test_checksum_failure_is_fatal_and_preserves_downloaded_bytes(self):
         self.identity["md5Hash"] = "incorrect"
         with patch("urllib.request.urlopen", side_effect=lambda *a, **k: self.http_response()), \

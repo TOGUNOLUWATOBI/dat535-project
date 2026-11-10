@@ -1,8 +1,8 @@
 """Collect one new KOL + AKT archive snapshot, locally or from GitHub Actions.
 
 The default source date is yesterday in Europe/Oslo. Each execution gets a new
-output directory. Selected XML and failed downloads are preserved. XML-only mode
-avoids a compact ZIP; the cleanup flag removes the national ZIP after validation.
+output directory. ZIP-only mode preserves selected XML inside a compact archive;
+the cleanup flag removes the national ZIP after validation. Failed sources stay.
 """
 
 import argparse
@@ -64,8 +64,10 @@ def request_with_retries(operation, attempts, record_failure):
 
 
 def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_only=False,
-                    remove_national_after_validation=False, xml_only=False):
+                    remove_national_after_validation=False, xml_only=False, zip_only=False):
     """Acquire, filter and validate a single source without changing older data."""
+    if xml_only and zip_only:
+        raise ValueError("Choose XML-only or ZIP-only retention, not both")
     providers = list(dict.fromkeys(p.upper() for p in providers))
     if not providers or any(not re.fullmatch(r"[A-Z]{3}", p) for p in providers):
         raise ValueError("Provider codes must have exactly three letters")
@@ -81,7 +83,7 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
     manifest = {
         "status": "running", "started_at_utc": utc_now(),
         "snapshot_date": day.isoformat(), "providers": providers,
-        "check_only": check_only, "request_failures": [], "xml_only": xml_only,
+        "check_only": check_only, "request_failures": [], "xml_only": xml_only, "zip_only": zip_only,
         "national_removed": False,
         "remove_national_after_validation": remove_national_after_validation,
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
@@ -155,6 +157,9 @@ def ingest_snapshot(day, output, providers=("KOL", "AKT"), attempts=3, check_onl
             # The original XML, selected ZIP, source identity and validation
             # must be durable before an explicitly requested source cleanup.
             save_json(manifest_path, manifest)
+            if zip_only:
+                from pipeline.storage.zip_bronze import retain_snapshot
+                retain_snapshot(manifest_path, apply=True, document=manifest)
             if remove_national_after_validation:
                 raw.unlink()
                 manifest.update(national_removed=True, national_removed_at_utc=utc_now())
@@ -177,14 +182,16 @@ def main():
     parser.add_argument("--check-only", action="store_true", help="Check source metadata without downloading the national ZIP")
     parser.add_argument("--remove-national-after-validation", action="store_true",
                         help="Remove the fetched national ZIP only after successful extraction and validation")
-    parser.add_argument("--xml-only", action="store_true", help="Keep XML without creating a compact provider ZIP")
+    retention = parser.add_mutually_exclusive_group()
+    retention.add_argument("--xml-only", action="store_true", help="Keep XML without creating a compact provider ZIP")
+    retention.add_argument("--zip-only", action="store_true", help="Keep a verified provider ZIP and release extracted XML")
     args = parser.parse_args()
     day = args.date or previous_source_day()
     run_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
     output = args.output or Path("data/bronze/entur") / run_name
     try:
         ingest_snapshot(day, output, args.providers, args.attempts, args.check_only,
-                        args.remove_national_after_validation, args.xml_only)
+                        args.remove_national_after_validation, args.xml_only, args.zip_only)
     except Exception as error:
         print(f"Ingestion failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 1

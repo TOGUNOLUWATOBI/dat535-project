@@ -14,6 +14,7 @@ from .generate_provider_dataset import generate, save_json
 from pipeline.processing.bronze.staging_sources import load_snapshot_sources
 from pipeline.processing.windows import month_bounds
 from pipeline.quality.source_checks import frame_validity
+from pipeline.storage.zip_bronze import with_snapshot_xml
 
 
 def existing_source(root, day):
@@ -34,6 +35,7 @@ def existing_source(root, day):
     return None
 
 
+@with_snapshot_xml
 def covers_month(manifest, day, first, last, providers):
     selection = load_snapshot_sources(manifest, day)
     if set(selection["providers"]) != set(providers):
@@ -76,7 +78,7 @@ def prepare(root, first_month, last_month, providers, remove_national=False, exc
                     output = root / "additional" / str(day)
                     if output.exists():
                         raise RuntimeError("Earlier failed attempt retained; choosing another source")
-                    generate(providers, [day], output, remove_national=remove_national, xml_only=True)
+                    generate(providers, [day], output, remove_national=remove_national, zip_only=True)
                     manifest = output / "manifest.json"
                 if not covers_month(manifest, day, first, last, providers):
                     raise ValueError("Source validity does not cover the entire requested month")

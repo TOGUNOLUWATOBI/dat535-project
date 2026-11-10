@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import zlib
 
 from pipeline.ingestion.download_entur_netex import file_checksums
 from pipeline.ingestion.generate_provider_dataset import validate_snapshot
@@ -49,7 +50,7 @@ def complete_fixture(root,bad_time=False,bad_calendar=False,full_month=False):
     lineage=[]
     for p in sorted(xml.glob('*.xml')):
         provider=next((v for v in ('KOL','AKT') if p.name.startswith(v+'_') or p.name.startswith('_'+v+'_')),None)
-        lineage.append({'member':p.name,'xml_path':str(p.relative_to(root)),'provider':provider,'bytes':p.stat().st_size,'sha256':file_checksums(p)[0],'source_crc32':0})
+        lineage.append({'member':p.name,'xml_path':str(p.relative_to(root)),'provider':provider,'bytes':p.stat().st_size,'sha256':file_checksums(p)[0],'source_crc32':zlib.crc32(p.read_bytes())})
     report=validate_snapshot(xml,lineage,['KOL','AKT'],date(2026,1,15))
     if report['status'] not in ('passed','passed_with_warnings'):raise AssertionError(report)
     (metadata/'validation.json').write_text(json.dumps(report));(metadata/'lineage.json').write_text(json.dumps(lineage))
@@ -150,6 +151,37 @@ class SnapshotPipelineTests(unittest.TestCase):
         repeat=run_snapshot(self.spark,manifest,None,self.root/'data')
         self.assertTrue(all(stage['reused'] for stage in repeat.values()))
         self.assertEqual(result['gold']['path'],repeat['gold']['path'])
+
+    def test_zip_migration_reuses_checkpoints_and_raw_trace_without_retaining_xml(self):
+        from pipeline.run_snapshot import run_snapshot
+        from pipeline.storage.zip_bronze import retain_snapshot, snapshot_xml
+        from pipeline.quality.trace import trace
+        from pipeline.ingestion.prepare_monthly_support import covers_month
+        manifest = complete_fixture(self.root / 'bronze', full_month=True)
+        outputs = run_snapshot(self.spark, manifest, None, self.root / 'data')
+        xml = manifest.parent.parent / 'xml/2026-01-15'
+        original = {p.name: p.read_bytes() for p in xml.iterdir()}
+        retain_snapshot(manifest, apply=True)
+        self.assertFalse(xml.exists())
+        self.assertTrue(covers_month(manifest, date(2026,1,15), date(2026,1,1), date(2026,1,31), ['KOL','AKT']))
+        self.assertFalse(xml.exists())
+        repeated = run_snapshot(self.spark, manifest, None, self.root / 'data')
+        self.assertTrue(all(stage['reused'] for stage in repeated.values()))
+        self.assertEqual(outputs['gold']['path'], repeated['gold']['path'])
+        self.assertFalse(xml.exists())
+        gold, silver, staging = (Path(outputs[name]['path']) for name in ('gold','silver','staging'))
+        journey = self.spark.read.parquet(str(silver/'journeys')).where("source_member='AKT_007.xml'").first()
+        checked = trace(self.spark, silver, gold, staging, journey.journey_key, 'zip-backed')
+        self.assertTrue(checked['ok'], checked['checks'])
+        self.assertFalse(xml.exists())
+        # A new output root forces real Spark XML reads from a restored ZIP snapshot.
+        rebuilt = run_snapshot(self.spark, manifest, None, self.root / 'new-data')
+        self.assertFalse(any(stage['reused'] for stage in rebuilt.values()))
+        totals = self.spark.read.parquet(str(Path(rebuilt['gold']['path'])/'daily_network_service'))
+        self.assertEqual(totals.agg({'scheduled_departures':'sum'}).first()[0], 66)
+        with snapshot_xml(manifest):
+            self.assertEqual({p.name:p.read_bytes() for p in xml.iterdir()}, original)
+        self.assertFalse(xml.exists())
 
     def test_full_month_retains_service_before_the_fifteenth_and_after_the_twenty_first(self):
         from pipeline.run_snapshot import run_snapshot

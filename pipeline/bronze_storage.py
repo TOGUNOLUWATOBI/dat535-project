@@ -134,6 +134,8 @@ def discard_provider_zips(root, apply=False):
             base = metadata.parent if metadata.name == "metadata" else metadata
             rows = manifest.get("snapshots", [manifest])
             for row in rows:
+                if row.get("raw_storage") == "zip":
+                    continue  # This ZIP is the authoritative raw copy, not a redundant cache.
                 name = row.get("combined_zip") or row.get("discarded_combined_zip")
                 if row.get("status") not in GOOD or not name:
                     continue

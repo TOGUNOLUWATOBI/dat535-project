@@ -7,7 +7,8 @@ separately using the commands below.
 The processing default is now the first through the last day of the snapshot's
 calendar month, including February and leap years. The original seven-day
 outputs remain historical evidence; they must be rebuilt before the full-month
-GUI can use them. No raw XML, ZIP or completed attempt is overwritten.
+GUI can use them. Source XML bytes and completed attempts are preserved. With
+ZIP retention, verified XML is stored compressed and extracted temporarily.
 
 ## Sources for early dates
 
@@ -48,9 +49,11 @@ bash scripts/rebuild_monthly.sh \
 
 The explicit removal option above applies only to newly downloaded national
 ZIPs after successful extraction and validation. Omit it to retain those ZIPs.
-Failed sources and extracted raw data are always kept. New calendar-support
-sources now use XML-only mode and create no compact ZIP. Allow storage for
-additional XML and derived outputs; old outputs remain. See [storage maintenance](storage_maintenance.md).
+Failed sources are kept. New calendar-support sources use ZIP-only retention:
+their selected XML stays in a checksum-verified compact ZIP and is extracted
+temporarily when checking coverage or processing. Existing expanded sources
+can be migrated without downloading again. Allow room for one extracted snapshot,
+Spark temporary files and new outputs. See [storage maintenance](storage_maintenance.md).
 
 The rebuild includes every existing registered primary snapshot, so older
 scheduled seven-day outputs are migrated as well. `--primary-manifest` also

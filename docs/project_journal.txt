@@ -976,3 +976,27 @@ chose Group04 for removal. We must stop/uninstall that exact service and keep
 its _work until unique data is checked. Both observed VS Code server versions
 were also active, so deleting their directories blindly would be wrong.
 The cleanup tool is prepared locally; no server files have been deleted by us.
+
+
+10 November 2026 - Switching Bronze to selected ZIPs
+
+We had focused on deleting ZIP copies, but that was not the right long-term
+choice for this small server. The full-month support downloads finished and
+Bronze grew to 23 GiB. The server had only 3.5 GiB free even after verified
+hardlink consolidation and removing the unused Group04 runner binaries and
+update package. The raw XML, including national stops, was the main cost.
+A larger VM disk was not available, and Drive was not configured.
+
+We decided to keep the selected KOL + AKT XML inside ZIPs and extract one
+snapshot at a time. The new migration builds archives from the files we already
+have, checks member CRCs and SHA-256 against the original lineage, backs up the
+manifest, then removes only the verified expanded copy. Failed sources and
+original manual uploads remain. National re-downloads are not needed.
+
+An isolated copy of the real 15 January snapshot contained 541 XML files,
+820,984,157 uncompressed bytes. Its rebuilt ZIP was 62,842,321 bytes. Restoring
+it preserved all XML hashes, source selection and checkpoint identity; the
+original local dataset was not changed. A real Spark fixture also verified
+ZIP-backed processing, checkpoint reuse, independent XML-to-Gold tracing and
+cleanup after processing. The server format migration has not been run or
+claimed here. Its free-space result must be checked after the user runs it.

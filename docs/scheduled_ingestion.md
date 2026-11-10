@@ -249,15 +249,19 @@ With `DAT535_DATA_ROOT=/srv/dat535/data`, each execution writes:
 └── bronze/entur/run-RUN_ID-ATTEMPT/
     ├── metadata/       Manifest, source metadata, lineage and validation report
     ├── national/       Failed/interrupted sources; successful ZIP removed after validation
-    └── xml/DATE/       Unmodified KOL + AKT XML and national stops (no compact ZIP)
+    ├── zip/            Retained KOL + AKT XML and national stops, compressed unchanged
+    └── xml/DATE/       Temporary extraction during validation/processing
 ```
 
 A metadata-only check creates just `metadata/`; it does not claim ZIP or XML
 validation. These server directories are retained across runs and reboots,
 subject to the school's disk and mount configuration. Successful scheduled runs
 remove their national ZIP after validation, recording `national_removed=true`.
-Selected XML and metadata have no automatic expiry. Identical bytes share
-storage; new unique snapshots still consume space. See [storage maintenance](storage_maintenance.md). Full ingestion checks
+The workflow uses `--zip-only --remove-national-after-validation`: selected raw
+XML stays inside its ZIP, metadata has no automatic expiry, and processing
+removes its verified extracted copy when the snapshot finishes or raises an error.
+An interrupted process can leave a cache that is verified and recovered on the
+next run. New unique ZIPs still consume space. See [storage maintenance](storage_maintenance.md). Full ingestion checks
 for 2 GiB free before checkout/download. Storage capacity and backups still need
 to account for growth in selected data. A removed national ZIP can currently
 be re-downloaded from its saved source URL/generation while Entur retains it;

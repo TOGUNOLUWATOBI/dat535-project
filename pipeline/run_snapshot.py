@@ -11,6 +11,7 @@ import sys
 from pipeline.checkpoints import Checkpoints, digest, identity
 from pipeline.processing.bronze.staging_sources import load_snapshot_sources
 from pipeline.processing.windows import service_window
+from pipeline.storage.zip_bronze import with_snapshot_xml
 
 
 def implementation(*paths):
@@ -21,6 +22,7 @@ def implementation(*paths):
 QUALITY_THRESHOLDS = "config/quality_thresholds.json"
 
 
+@with_snapshot_xml
 def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold", service_from=None, service_to=None,
                  thresholds_path=None, history_role="primary"):
     from pipeline.processing.bronze.snapshot_to_parquet import convert_snapshot

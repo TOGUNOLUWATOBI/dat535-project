@@ -73,7 +73,7 @@ class CombinedDatasetTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Historical mismatch in AKT_line.xml"):
             builder.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
 
-    def run_generation(self, missing=False, xml_only=False):
+    def run_generation(self, missing=False, xml_only=False, zip_only=False):
         fixture(self.source, missing=missing)
         output = self.root / "dataset"
         metadata = {"generation": "123", "md5Hash": "unique", "size": str(self.source.stat().st_size),
@@ -88,9 +88,9 @@ class CombinedDatasetTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             if missing:
                 with self.assertRaisesRegex(RuntimeError, "Reference validation failed"):
-                    builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True, xml_only=xml_only)
+                    builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True, xml_only=xml_only, zip_only=zip_only)
             else:
-                builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True, xml_only=xml_only)
+                builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, remove_national=True, xml_only=xml_only, zip_only=zip_only)
         return output, json.loads((output / "manifest.json").read_text())
 
     def test_cleanup_only_after_success_and_outputs_are_preserved(self):
@@ -174,6 +174,36 @@ class CombinedDatasetTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()), \
                 self.assertRaisesRegex(RuntimeError, "does not match recorded source lineage"):
             builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, resume=True)
+
+    def test_zip_only_acquisition_and_resume_need_no_permanent_extraction(self):
+        from pipeline.storage.zip_bronze import snapshot_xml, specification, retain_snapshot
+        for start_as_xml in (False, True):
+            with self.subTest(start_as_xml=start_as_xml):
+                if self.root.joinpath("dataset").exists():
+                    import shutil
+                    shutil.rmtree(self.root / "dataset")
+                output, manifest = self.run_generation(zip_only=not start_as_xml, xml_only=start_as_xml)
+                path = output / "manifest.json"
+                if start_as_xml:
+                    retain_snapshot(path, "2026-01-15", apply=True)
+                spec = specification(path, "2026-01-15")
+                self.assertFalse(spec["xml"].exists())
+                with zipfile.ZipFile(self.source) as original, zipfile.ZipFile(spec["archive"]) as saved:
+                    for member in saved.namelist():
+                        self.assertEqual(saved.read(member), original.read(member))
+                with patch.object(builder, "source_metadata") as metadata, patch.object(builder, "download") as download:
+                    builder.generate(["KOL", "AKT"], [date(2026, 1, 15)], output, resume=True)
+                    metadata.assert_not_called(); download.assert_not_called()
+                with snapshot_xml(path, "2026-01-15"):
+                    self.assertTrue(spec["xml"].exists())
+                self.assertFalse(spec["xml"].exists())
+                self.assertFalse(list(output.joinpath("national").glob("*.zip")))
+
+    def test_zip_only_validation_failure_preserves_the_failed_source(self):
+        output, manifest = self.run_generation(missing=True, zip_only=True)
+        self.assertEqual(manifest["status"], "failed")
+        self.assertTrue(Path(manifest["snapshots"][0]["national_zip"]).exists())
+        self.assertTrue(Path(manifest["snapshots"][0]["xml_directory"]).exists())
 
     def test_resume_requires_an_existing_dataset(self):
         output = self.root / "missing-dataset"

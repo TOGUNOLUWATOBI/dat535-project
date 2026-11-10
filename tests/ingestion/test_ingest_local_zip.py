@@ -67,6 +67,15 @@ class ManualZipIngestionTests(unittest.TestCase):
                 self.assertEqual((self.output / item["xml_path"]).read_bytes(), source.read(item["member"]))
                 self.assertEqual(compact.read(item["member"]), source.read(item["member"]))
 
+    def test_zip_only_upload_keeps_original_and_duplicate_detection_works_after_eviction(self):
+        result = uploader.ingest_zip(self.source, self.day, self.output, zip_only=True)
+        self.assertEqual(result["raw_storage"], "zip")
+        self.assertFalse((self.output / result["xml_directory"]).exists())
+        self.assertEqual((self.output / result["uploaded_archive"]).read_bytes(), self.source.read_bytes())
+        duplicate = self.import_zip(output=self.root / "bronze/duplicate")
+        self.assertEqual(duplicate["status"], "duplicate")
+        self.assertFalse((self.output / result["xml_directory"]).exists())
+
     def test_selected_provider_zip_is_also_accepted(self):
         self.rewrite(lambda members: [(n, b) for n, b in members if selected_member(n, ["KOL", "AKT"])])
         result = self.import_zip()

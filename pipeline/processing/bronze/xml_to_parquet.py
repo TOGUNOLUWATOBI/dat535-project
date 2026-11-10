@@ -82,6 +82,12 @@ def projected_tables(frames, extra_context=()):
 
 
 def convert(spark, manifest_path, output, snapshot_date=None, sample_per_provider=None):
+    from pipeline.storage.zip_bronze import snapshot_xml
+    with snapshot_xml(manifest_path, snapshot_date):
+        return _convert(spark, manifest_path, output, snapshot_date, sample_per_provider)
+
+
+def _convert(spark, manifest_path, output, snapshot_date=None, sample_per_provider=None):
     from pyspark import StorageLevel
     from pyspark.sql import functions as F
 

@@ -80,7 +80,7 @@ jobs:
           CHECK_ONLY: ${{ inputs.check_only }}
         shell: bash
         run: |
-          args=(--output "$INGESTION_OUTPUT" --remove-national-after-validation --xml-only)
+          args=(--output "$INGESTION_OUTPUT" --remove-national-after-validation --zip-only)
           if [[ -n "$SOURCE_DATE" ]]; then
             args+=(--date "$SOURCE_DATE")
           fi

@@ -244,6 +244,13 @@ def pick_examples(spark, silver, staging, first, last):
 
 
 def trace(spark, silver, gold, staging, journey_key, kind, context=None):
+    from pipeline.storage.zip_bronze import snapshot_xml
+    source = json.loads((Path(staging) / "metadata/manifest.json").read_text())
+    with snapshot_xml(source["source_manifest"], source["snapshot_date"]):
+        return _trace(spark, silver, gold, staging, journey_key, kind, context)
+
+
+def _trace(spark, silver, gold, staging, journey_key, kind, context=None):
     from pyspark.sql import functions as F
     s_manifest = json.loads((silver / "metadata/manifest.json").read_text())
     g_manifest = json.loads((gold / "metadata/manifest.json").read_text())
