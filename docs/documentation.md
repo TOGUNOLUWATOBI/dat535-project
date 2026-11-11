@@ -1615,7 +1615,10 @@ bash scripts/run_gui.sh          # http://localhost:8501 (VS Code forwards the p
 
 `DAT535_DATA_ROOT` (default `/srv/dat535/data`), `DAT535_GUI_PORT` (default
 8501) and `DAT535_GUI_PYTHON` can be overridden. The app listens on
-127.0.0.1 only. Open it through SSH or VS Code port forwarding.
+`0.0.0.0` (all network interfaces, including localhost). SSH or VS Code port
+forwarding to `http://localhost:8501` still works. For direct school-server
+access, open `http://152.94.163.144:8501`; inbound TCP 8501 must be allowed by
+the school/cloud and host firewalls. The app has no login.
 
 The workflow calls `bash scripts/run_gui.sh --restart` after successful
 processing and route history. The same command can be run manually: it stops

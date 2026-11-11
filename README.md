@@ -99,7 +99,10 @@ metadata reports are uploaded to GitHub.
 A read-only Streamlit app over Gold and route history; it reads Parquet with
 pandas and never starts Spark. `bash scripts/run_gui.sh --restart` runs it in the
 background (log: `$DAT535_DATA_ROOT/metadata/gui.log`). It listens on
-`127.0.0.1:8501`; open it through VS Code or SSH port forwarding. Pages:
+`0.0.0.0:8501` (all interfaces, including localhost). VS Code or SSH port
+forwarding to `http://localhost:8501` still works. For direct school-server
+access, open `http://152.94.163.144:8501` when inbound TCP 8501 is allowed by
+the school/cloud and host firewalls. The app has no login. Pages:
 Overview, Daily service, Compare months, One line, What changed, Replaced lines
 and Data checks. See the [GUI guide](docs/documentation.md#gui).
 
