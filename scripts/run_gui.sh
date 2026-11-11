@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Start the Streamlit Gold explorer (read-only). Open http://localhost:8501
-# (VS Code forwards the port automatically when connected over SSH).
+# Start the Streamlit Gold explorer (read-only) on all network interfaces.
+# Open http://<server-ip>:8501 or http://localhost:8501 through SSH forwarding.
 # Uses its own environment so the Spark processing environment is untouched:
 #   python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements.txt
 # --restart stops this app on its configured port and starts it in the background.
@@ -15,7 +15,7 @@ if [[ ! "$gui_port" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 gui_command=("$gui_python" -m streamlit run app/gold_app.py --server.port "$gui_port"
-  --server.address 127.0.0.1 --server.headless true --browser.gatherUsageStats false)
+  --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false)
 
 if [[ "${1:-}" == "--restart" ]]; then
   shift
@@ -42,7 +42,7 @@ if [[ "${1:-}" == "--restart" ]]; then
     tail -n 20 "$gui_log" >&2
     exit 1
   fi
-  echo "GUI running: http://127.0.0.1:$gui_port (PID $gui_pid); log: $gui_log"
+  echo "GUI listening on 0.0.0.0:$gui_port (PID $gui_pid); open http://<server-ip>:$gui_port or http://localhost:$gui_port through SSH forwarding; log: $gui_log"
   exit 0
 fi
 
