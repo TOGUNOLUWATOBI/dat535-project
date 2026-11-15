@@ -101,7 +101,7 @@ def ensure_support_months(jobs, plan_path, remove_national=False):
     supporting_months = {j["service_from"][:7] for j in support}
     for month in sorted(primary_months - supporting_months):
         from pipeline.ingestion.prepare_monthly_support import prepare
-        from pipeline.ingestion.download_entur_netex import parse_month
+        from pipeline.ingestion.netex import parse_month
         providers = json.loads(plan_path.read_text())["providers"]
         extra = prepare(plan_path.resolve().parent / "extra_months" / month,
                         parse_month(month), parse_month(month), providers,

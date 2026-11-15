@@ -20,8 +20,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from pipeline.common import sha256_file, utc_now, write_json
-from .download_entur_netex import download, make_url, source_metadata
-from .generate_provider_dataset import extract_snapshot, validate_snapshot
+from .netex import download, extract_snapshot, make_url, source_metadata, validate_snapshot
 
 
 def previous_source_day(now=None):

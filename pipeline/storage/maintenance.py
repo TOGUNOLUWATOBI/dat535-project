@@ -14,7 +14,7 @@ import stat
 from uuid import uuid4
 
 from pipeline.common import sha256_file, write_json
-from pipeline.ingestion.generate_provider_dataset import verify_materialized_snapshot
+from pipeline.ingestion.netex import verify_materialized_snapshot
 from pipeline.storage.zip_bronze import GOOD
 
 

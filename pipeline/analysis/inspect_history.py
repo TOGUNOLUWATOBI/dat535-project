@@ -19,24 +19,8 @@ import json
 from pathlib import Path
 import sys
 
+from pipeline.checkpoints import latest_history
 from pipeline.spark_runtime import start_spark
-
-
-def latest_history(data_root):
-    """(path, manifest) of the most recently completed route-history output under ``data_root``."""
-    root = Path(data_root) / "gold" / "entur" / "history"
-    found = []
-    for manifest in root.glob("*/history-*/metadata/manifest.json"):
-        try:
-            data = json.loads(manifest.read_text())
-        except (OSError, ValueError):
-            continue
-        if data.get("status") == "complete":
-            found.append((data.get("completed_at_utc", ""), manifest.parent.parent, data))
-    if not found:
-        raise SystemExit(f"No complete route history under {root}; run scripts/run.sh history first")
-    _, path, data = max(found, key=lambda item: item[0])
-    return path, data
 
 
 def clock(seconds):

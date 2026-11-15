@@ -12,7 +12,7 @@ import zipfile
 import zlib
 
 from pipeline.common import sha256_file
-from pipeline.ingestion.generate_provider_dataset import NETEX, validate_snapshot
+from pipeline.ingestion.netex import NETEX, validate_snapshot
 
 
 def spark_session():

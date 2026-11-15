@@ -14,7 +14,7 @@ import sqlite3
 
 import pandas as pd
 
-from pipeline.analysis.inspect_history import latest_history
+from pipeline.checkpoints import latest_history
 from pipeline.processing.windows import window_signature
 
 REPO = Path(__file__).resolve().parent.parent

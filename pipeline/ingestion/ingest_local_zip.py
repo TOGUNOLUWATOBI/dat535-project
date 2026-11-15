@@ -20,8 +20,8 @@ from zoneinfo import ZoneInfo
 import zipfile
 
 from pipeline.common import sha256_file, utc_now, write_json
-from .download_entur_netex import file_checksums
-from .generate_provider_dataset import extract_snapshot, validate_snapshot, verify_materialized_snapshot
+from .netex import extract_snapshot, file_checksums, validate_snapshot, verify_materialized_snapshot
+from pipeline.storage.zip_bronze import with_snapshot_xml
 
 
 def check_archive(path):
@@ -46,15 +46,9 @@ def check_archive(path):
             raise RuntimeError(f"ZIP CRC check failed: {bad}")
 
 
+@with_snapshot_xml
 def verify_previous(manifest_path, identity):
-    """Check a cataloged earlier import, restoring its XML from ZIP storage while checking."""
-    from pipeline.storage.zip_bronze import snapshot_xml
-    with snapshot_xml(manifest_path):
-        return _verify_previous(manifest_path, identity)
-
-
-def _verify_previous(manifest_path, identity):
-    """A duplicate must point at complete data that is still intact."""
+    """A duplicate must point at intact, complete data; restore ZIP-backed XML while checking."""
     path = Path(manifest_path)
     previous = json.loads(path.read_text())
     if (previous.get("status") not in ("complete", "complete_with_warnings")

@@ -8,8 +8,8 @@ import tempfile
 import unittest
 
 from pipeline.common import sha256_file
-from pipeline.ingestion.generate_provider_dataset import validate_snapshot
-from pipeline.processing.bronze.staging_sources import load_snapshot_sources, load_sources
+from pipeline.ingestion.netex import validate_snapshot
+from pipeline.processing.staging import load_snapshot_sources
 from tests.fixtures import complete_fixture, spark_session
 
 
@@ -69,17 +69,41 @@ class SourceSelectionTests(unittest.TestCase):
         self.manifest = staged_fixture(self.root / "bronze")
 
     def test_selects_validated_provider_files_and_expected_counts(self):
-        result = load_sources(self.manifest)
-        self.assertEqual(result["scope"], "provider_line_files")
+        result = load_snapshot_sources(self.manifest)
+        self.assertEqual(result["scope"], "complete_snapshot")
         self.assertEqual([f["source_member"] for f in result["files"]], ["KOL_line.xml", "AKT_line.xml"])
-        self.assertEqual(result["expected_rows"], {"frames": 2, "lines": 2, "service_journeys": 2, "passing_times": 4})
+        self.assertEqual({name: result["expected_rows"][name] for name in
+                          ("frames", "lines", "service_journeys", "passing_times")},
+                         {"frames": 2, "lines": 2, "service_journeys": 2, "passing_times": 4})
+        self.assertEqual([f["source_member"] for f in result["stop_files"]], ["_stops.xml"])
 
     def test_changed_source_and_wrong_date_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "does not match"):
-            load_sources(self.manifest, date(2026, 2, 15))
+            load_snapshot_sources(self.manifest, date(2026, 2, 15))
         (self.root / "bronze/xml/2026-01-15/KOL_line.xml").write_text("changed")
         with self.assertRaisesRegex(RuntimeError, "changed since Bronze validation"):
-            load_sources(self.manifest)
+            load_snapshot_sources(self.manifest)
+
+    def test_changed_national_stops_are_rejected_before_spark_starts(self):
+        stops = self.root / "bronze/xml/2026-01-15/_stops.xml"
+        stops.write_text("changed")
+        with self.assertRaisesRegex(RuntimeError, "changed since Bronze validation"):
+            load_snapshot_sources(self.manifest)
+
+    def test_provider_files_without_national_stops_are_not_a_complete_snapshot(self):
+        path = self.manifest.parent / "lineage.json"
+        lineage = json.loads(path.read_text())
+        path.write_text(json.dumps([item for item in lineage if item["member"] != "_stops.xml"]))
+        with self.assertRaisesRegex(ValueError, "exactly one national"):
+            load_snapshot_sources(self.manifest)
+
+    def test_shared_lineage_cannot_escape_the_bronze_xml_directory(self):
+        path = self.manifest.parent / "lineage.json"
+        lineage = json.loads(path.read_text())
+        next(item for item in lineage if item["member"] == "_stops.xml")["member"] = "../_stops.xml"
+        path.write_text(json.dumps(lineage))
+        with self.assertRaisesRegex(ValueError, "Unsafe member path"):
+            load_snapshot_sources(self.manifest)
 
     def test_failed_or_duplicate_ingestions_are_not_processed(self):
         value = json.loads(self.manifest.read_text())
@@ -87,7 +111,7 @@ class SourceSelectionTests(unittest.TestCase):
             value["status"] = status
             self.manifest.write_text(json.dumps(value))
             with self.assertRaisesRegex(ValueError, "Processing requires"):
-                load_sources(self.manifest)
+                load_snapshot_sources(self.manifest)
 
     def test_historical_manifest_supports_original_and_metadata_subdirectory_layouts(self):
         for pretty in (False, True):
@@ -105,16 +129,16 @@ class SourceSelectionTests(unittest.TestCase):
                     "snapshots": [{"snapshot_date": "2026-01-15", "status": "validated_with_warnings",
                                    "xml_directory": "xml/2026-01-15", "validation_report": str(report_path)}]}))
                 with self.assertRaisesRegex(ValueError, "Specify --date"):
-                    load_sources(target)
-                result = load_sources(target, date(2026, 1, 15))
+                    load_snapshot_sources(target)
+                result = load_snapshot_sources(target, date(2026, 1, 15))
                 self.assertEqual(result["expected_rows"]["passing_times"], 4)
                 partial = json.loads(target.read_text())
                 partial["status"] = "failed"
                 partial["snapshots"].append({"snapshot_date":"2026-02-01","status":"failed"})
                 target.write_text(json.dumps(partial))
-                self.assertEqual(load_sources(target,date(2026,1,15))["expected_rows"]["passing_times"],4)
+                self.assertEqual(load_snapshot_sources(target,date(2026,1,15))["expected_rows"]["passing_times"],4)
                 with self.assertRaisesRegex(ValueError,"missing or not validated"):
-                    load_sources(target,date(2026,2,1))
+                    load_snapshot_sources(target,date(2026,2,1))
 
 
 @unittest.skipUnless(importlib.util.find_spec("pyspark"), "Install requirements.txt to run real Spark integration tests")
@@ -132,7 +156,7 @@ class SparkStagingTests(unittest.TestCase):
         self.manifest = complete_fixture(self.bronze)
 
     def test_real_spark_staging_preserves_context_references_order_and_raw_values(self):
-        from pipeline.processing.bronze.snapshot_to_parquet import convert_snapshot
+        from pipeline.processing.staging import convert_snapshot
         output = self.root / "staging"
         result = convert_snapshot(self.spark, self.manifest, output)
         self.assertEqual(result["status"], "complete")
@@ -159,7 +183,7 @@ class SparkStagingTests(unittest.TestCase):
             convert_snapshot(self.spark, self.manifest, output)
 
     def test_count_mismatch_fails_and_keeps_failure_manifest(self):
-        from pipeline.processing.bronze.snapshot_to_parquet import convert_snapshot
+        from pipeline.processing.staging import convert_snapshot
         report_path = self.manifest.parent / "validation.json"
         report = json.loads(report_path.read_text())
         member = next(m for m in report["members"] if m["member"] == "KOL_007.xml")

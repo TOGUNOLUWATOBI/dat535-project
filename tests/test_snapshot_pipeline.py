@@ -100,7 +100,7 @@ class SnapshotPipelineTests(unittest.TestCase):
         self.assertFalse(checked['ok'])
         # A provider promised by the manifest must not disappear merely because
         # every observed provider has clean, internally reconciled data.
-        from pipeline.processing.gold.build import build_gold
+        from pipeline.processing.gold import build_gold
 
         missing_manifest = wrong_silver / 'metadata/manifest.json'
         missing_data = json.loads(missing_manifest.read_text())
@@ -224,7 +224,7 @@ class SnapshotPipelineTests(unittest.TestCase):
         self.assertIn('calendar_affected_journey_rate', {f['rule'] for f in gate['findings'] if f['level'] == 'fail'})
 
     def test_ambiguous_unversioned_references_do_not_multiply_source_rows(self):
-        from pipeline.processing.silver.build import lookup
+        from pipeline.processing.silver import lookup
 
         source = self.spark.createDataFrame(
             [

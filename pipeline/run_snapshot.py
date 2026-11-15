@@ -10,7 +10,7 @@ import sys
 
 from pipeline.checkpoints import Checkpoints, identity
 from pipeline.common import sha256_file
-from pipeline.processing.bronze.staging_sources import load_snapshot_sources
+from pipeline.processing.staging import load_snapshot_sources
 from pipeline.processing.windows import service_window
 from pipeline.spark_runtime import error_text, memory_size, start_spark, stop_spark, worker_environment
 from pipeline.storage.zip_bronze import with_snapshot_xml
@@ -37,9 +37,9 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
     byte-verified earlier output is reused instead of recomputed. The
     decorator restores ZIP-backed source XML for the duration of the call.
     """
-    from pipeline.processing.bronze.snapshot_to_parquet import convert_snapshot
-    from pipeline.processing.silver.build import build_silver
-    from pipeline.processing.gold.build import build_gold
+    from pipeline.processing.staging import convert_snapshot
+    from pipeline.processing.silver import build_silver
+    from pipeline.processing.gold import build_gold
     from pipeline.quality.silver_profile import read_thresholds
     root = Path(__file__).resolve().parent.parent
     thresholds_path = Path(thresholds_path) if thresholds_path else root / QUALITY_THRESHOLDS
@@ -55,15 +55,13 @@ def run_snapshot(spark, manifest, day, data_root, state_path=None, through="gold
         key = state.register(selection)
         with state.lock(key):
             versions = {
-                "staging": implementation("pipeline/processing/bronze/snapshot_to_parquet.py",
-                                          "pipeline/processing/bronze/netex_schema.py",
-                                          "pipeline/processing/bronze/staging_sources.py"),
-                "silver": implementation("pipeline/processing/silver/build.py",
-                                         "pipeline/processing/silver/calendars.py",
+                "staging": implementation("pipeline/processing/staging.py",
+                                          "pipeline/processing/schemas.py"),
+                "silver": implementation("pipeline/processing/silver.py",
                                          "pipeline/processing/windows.py"),
                 # The gate code and its thresholds decide whether Gold publishes, so a change to
                 # either rebuilds Gold (Silver is reused).
-                "gold": identity([implementation("pipeline/processing/gold/build.py",
+                "gold": identity([implementation("pipeline/processing/gold.py",
                                                  "pipeline/quality/silver_profile.py"), thresholds]),
             }
             outputs = {}

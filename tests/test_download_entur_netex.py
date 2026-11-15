@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from pipeline.ingestion import download_entur_netex as downloader
+from pipeline.ingestion import netex as downloader
 
 
 def archive_bytes(description="current"):

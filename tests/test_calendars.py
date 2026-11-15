@@ -1,5 +1,5 @@
 import unittest
-from pipeline.processing.silver.calendars import expand_calendars
+from pipeline.processing.silver import expand_calendars
 
 
 def row(identifier, **fields):

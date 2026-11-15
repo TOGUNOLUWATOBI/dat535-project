@@ -8,13 +8,15 @@ must equal the count recorded by Bronze validation, and is checked again after
 the Parquet read-back. This is staging, not Silver: values stay raw strings.
 """
 
+from datetime import date
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from pipeline.common import utc_now, write_json
+from pipeline.common import sha256_file, utc_now, write_json
+from pipeline.ingestion.netex import provider_for
 from pipeline.storage.zip_bronze import with_snapshot_xml
-from .netex_schema import complete_frame_schema, stop_place_schema
-from .staging_sources import load_snapshot_sources, verify_sources
+from .schemas import complete_frame_schema, stop_place_schema
+
 
 # Source context carried on every staged frame and entity row.
 CONTEXT = ["snapshot_date", "provider", "source_file", "source_member", "source_xml_sha256",
@@ -34,6 +36,108 @@ ENTITY_TABLES = {
     "day_type_assignments": ("ServiceCalendarFrame", "dayTypeAssignments", ("DayTypeAssignment",)),
     "flexible_stop_places": ("SiteFrame", "flexibleStopPlaces", ("FlexibleStopPlace",)),
 }
+
+
+def verify_sources(sources):
+    """Fail if selected XML bytes no longer match the validated Bronze lineage."""
+    for item in sources:
+        path = Path(item["source_file"])
+        if (not path.is_file() or path.stat().st_size != item["source_bytes"]
+                or sha256_file(path) != item["source_xml_sha256"]):
+            raise RuntimeError(f"Source XML changed since Bronze validation: {path}")
+
+
+def load_snapshot_sources(manifest_path, snapshot_date=None):
+    """Select one complete validated snapshot, including shared frames and national stops.
+
+    Both single-run and historical manifests are accepted. Read metadata once,
+    then verify the selected line, shared and stop files together. The expected
+    staging counts come from Bronze validation, not from the Spark projection.
+    """
+    path = Path(manifest_path).resolve()
+    manifest = json.loads(path.read_text())
+    historical = "snapshots" in manifest
+    root = path.parent.parent if path.parent.name == "metadata" else path.parent
+    if historical:
+        if snapshot_date is None:
+            raise ValueError("Specify --date when processing a historical dataset manifest")
+        day = date.fromisoformat(str(snapshot_date))
+        rows = [r for r in manifest["snapshots"] if r["snapshot_date"] == day.isoformat()]
+        if len(rows) != 1 or rows[0]["status"] not in ("validated", "validated_with_warnings"):
+            raise ValueError("Requested historical snapshot is missing or not validated")
+        snapshot = rows[0]
+        metadata = path.parent if path.parent.name == "metadata" else root
+        lineage_path = metadata / "lineage" / f"{day}.json"
+        report_path = Path(snapshot["validation_report"])
+        if not report_path.is_absolute():
+            report_path = root / report_path
+    else:
+        if manifest.get("status") not in ("complete", "complete_with_warnings"):
+            raise ValueError("Processing requires a complete or complete_with_warnings ingestion")
+        day = date.fromisoformat(manifest["snapshot_date"])
+        if snapshot_date is not None and date.fromisoformat(str(snapshot_date)) != day:
+            raise ValueError("Requested date does not match the ingestion manifest")
+        snapshot = manifest
+        lineage_path, report_path = path.parent / "lineage.json", path.parent / "validation.json"
+    xml = Path(snapshot["xml_directory"])
+    xml = (xml if xml.is_absolute() else root / xml).resolve()
+    lineage = json.loads(lineage_path.read_text())
+    validation = json.loads(report_path.read_text())
+    if validation.get("status") not in ("passed", "passed_with_warnings"):
+        raise ValueError("Source reference validation has not passed")
+    if validation.get("snapshot_date") != day.isoformat():
+        raise ValueError("Source validation date does not match the requested snapshot")
+    reports = {m["member"]: m for m in validation["members"]}
+    providers = manifest["providers"]
+    lines, shared, stops = [], [], []
+    for item in lineage:
+        owner = item["provider"]
+        member = PurePosixPath(item["member"])
+        if member.name == "_stops.xml":
+            group = stops
+        elif member.name.startswith("_") and owner in providers:
+            group = shared
+        elif owner in providers and member.name.upper().startswith(owner + "_"):
+            group = lines
+        else:
+            continue
+        if member.is_absolute() or ".." in member.parts or "\\" in str(member):
+            raise ValueError(f"Unsafe member path in source lineage: {member}")
+        source = (xml / str(member)).resolve()
+        if not source.is_relative_to(xml):
+            raise ValueError(f"Source member escapes XML root: {member}")
+        if group is lines and provider_for(str(member), providers) != owner:
+            raise ValueError(f"Source member or provider is inconsistent: {member}")
+        report = reports[str(member)]
+        if group is not stops and report["entity_counts"].get("CompositeFrame", 0) != 1:
+            raise ValueError(f"Staging requires one CompositeFrame per provider file: {member}")
+        group.append({
+            "source_file": str(source), "source_member": str(member), "provider": owner or "NSR",
+            "source_xml_sha256": item["sha256"], "source_bytes": item["bytes"],
+            "source_profile": report["profile"], "publication_timestamp": report["publication_timestamp"],
+            "entity_counts": report["entity_counts"],
+        })
+    chosen = []
+    for provider in providers:
+        files = sorted((f for f in lines if f["provider"] == provider),
+                       key=lambda f: (f["source_bytes"], f["source_member"]))
+        if not files:
+            raise ValueError(f"No eligible validated provider XML selected for {provider}")
+        chosen.extend(files)
+    if len(stops) != 1:
+        raise ValueError("Complete snapshot requires exactly one national _stops.xml")
+    files = chosen + shared
+    verify_sources(files + stops)
+    tags = {name: kinds for name, (_, _, kinds) in ENTITY_TABLES.items()}
+    tags.update(passing_times=("TimetabledPassingTime",), journey_pattern_points=("StopPointInJourneyPattern",))
+    expected = {name: sum(f["entity_counts"].get(tag, 0) for f in files for tag in kinds)
+                for name, kinds in tags.items()}
+    expected.update(frames=len(files), stop_places=sum(f["entity_counts"].get("StopPlace", 0) for f in stops),
+                    quays=sum(f["entity_counts"].get("Quay", 0) for f in stops))
+    return {"source_manifest": str(path), "source_root": str(root), "snapshot_date": day.isoformat(),
+            "providers": providers, "scope": "complete_snapshot", "files": files, "stop_files": stops,
+            "source_sha256": snapshot.get("source_sha256"), "source_generation": snapshot.get("source_generation"),
+            "expected_rows": expected}
 
 
 def add_context(spark, raw, selection, inventory_path):
