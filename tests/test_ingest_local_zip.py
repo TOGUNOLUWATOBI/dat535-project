@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from pipeline.ingestion import ingest_local_zip as uploader
-from pipeline.ingestion.generate_provider_dataset import selected_member
+from pipeline.ingestion.netex import selected_member
 from tests.fixtures import document, provider_zip
 
 

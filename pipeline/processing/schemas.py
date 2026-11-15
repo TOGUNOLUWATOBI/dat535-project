@@ -8,65 +8,55 @@ The original XML stays authoritative for anything not projected here.
 """
 
 
-def composite_frame_schema():
-    """Base CompositeFrame schema: lines, service journeys and their passing times."""
+def complete_frame_schema():
+    """Provider frames and reference definitions, preserving raw NeTEx values."""
     from pyspark.sql.types import ArrayType, StringType, StructField, StructType
 
     def struct(*fields):
         return StructType([StructField(name, kind, True) for name, kind in fields]
                           + [StructField("_unmapped_xml", ArrayType(StringType()), True)])
 
-    string = StringType()
-    reference = struct(("_ref", string), ("_version", string), ("_order", string))
+    s = StringType()
+    ref = struct(("_ref", s), ("_version", s), ("_order", s))
     line = struct(
-        ("_id", string), ("_version", string), ("Name", string),
-        ("PublicCode", string), ("PrivateCode", string), ("TransportMode", string),
-        ("OperatorRef", reference), ("RepresentedByGroupRef", reference),
+        ("_id", s), ("_version", s), ("Name", s),
+        ("PublicCode", s), ("PrivateCode", s), ("TransportMode", s),
+        ("OperatorRef", ref), ("RepresentedByGroupRef", ref),
     )
     passing_time = struct(
-        ("_id", string), ("_version", string), ("_order", string),
-        ("StopPointInJourneyPatternRef", reference),
-        ("ArrivalTime", string), ("DepartureTime", string),
-        ("ArrivalDayOffset", string), ("DepartureDayOffset", string),
+        ("_id", s), ("_version", s), ("_order", s),
+        ("StopPointInJourneyPatternRef", ref),
+        ("ArrivalTime", s), ("DepartureTime", s),
+        ("ArrivalDayOffset", s), ("DepartureDayOffset", s),
     )
     journey = struct(
-        ("_id", string), ("_version", string), ("Name", string),
-        ("PrivateCode", string), ("DepartureTime", string),
-        ("JourneyPatternRef", reference), ("LineRef", reference),
-        ("OperatorRef", reference),
-        ("dayTypes", struct(("DayTypeRef", ArrayType(reference)))),
+        ("_id", s), ("_version", s), ("Name", s),
+        ("PrivateCode", s), ("DepartureTime", s),
+        ("JourneyPatternRef", ref), ("LineRef", ref),
+        ("OperatorRef", ref),
+        ("dayTypes", struct(("DayTypeRef", ArrayType(ref)))),
         ("passingTimes", struct(("TimetabledPassingTime", ArrayType(passing_time)))),
     )
     service_frame = struct(
-        ("_id", string), ("_version", string),
+        ("_id", s), ("_version", s),
         ("lines", struct(("Line", ArrayType(line)), ("FlexibleLine", ArrayType(line)))),
     )
     timetable_frame = struct(
-        ("_id", string), ("_version", string),
+        ("_id", s), ("_version", s),
         ("vehicleJourneys", struct(("ServiceJourney", ArrayType(journey)),
                                    ("FlexibleServiceJourney", ArrayType(journey)))),
     )
-    return struct(
-        ("_id", string), ("_version", string), ("_created", string),
+    # Build the common fields once, then add reference and flexible-service
+    # fields in the existing order so saved staging schemas remain compatible.
+    schema = struct(
+        ("_id", s), ("_version", s), ("_created", s),
         ("frames", struct(("ServiceFrame", ArrayType(service_frame)),
                            ("TimetableFrame", ArrayType(timetable_frame)))),
     )
 
-
-def complete_frame_schema():
-    """Provider frames including the reference definitions used by Silver."""
-    from pyspark.sql.types import ArrayType, StringType, StructField, StructType
-
-    s = StringType()
-
-    def struct(*fields):
-        return StructType([StructField(name, kind, True) for name, kind in fields]
-                          + [StructField("_unmapped_xml", ArrayType(s), True)])
-
     def extend(schema, *fields):
         return StructType(schema.fields + [StructField(name, kind, True) for name, kind in fields])
 
-    ref = struct(("_ref", s), ("_version", s), ("_order", s))
     validity = struct(("AvailabilityCondition", ArrayType(struct(
         ("_id", s), ("_version", s), ("FromDate", s), ("ToDate", s),
         ("IsAvailable", s)))))
@@ -97,7 +87,6 @@ def complete_frame_schema():
                       ("operatingPeriods", struct(("OperatingPeriod", ArrayType(period)))),
                       ("operatingDays", struct(("OperatingDay", ArrayType(day)))),
                       ("dayTypeAssignments", struct(("DayTypeAssignment", ArrayType(day_assignment)))))
-    schema = composite_frame_schema()
     frames = schema["frames"].dataType
     service = extend(frames["ServiceFrame"].dataType.elementType,
                      ("routes", struct(("Route", ArrayType(route)))),

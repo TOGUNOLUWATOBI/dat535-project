@@ -58,6 +58,13 @@ evidence. Transport facts live in Parquet; SQLite holds only processing state
 (`python3 -m pipeline.checkpoints --state /srv/dat535/data/pipeline_state.sqlite3`
 lists every attempt).
 
+Processing has one module per stage. `staging.py` owns source selection and the
+XML-to-Parquet conversion; `silver.py` owns calendar expansion and the resolved
+records; `gold.py` owns the service metrics. `schemas.py` defines the XML reader
+schemas, and `windows.py` supplies the shared service-date policy. The ingestion
+commands share download, extraction and source-validation functions in
+`ingestion/netex.py`; they do not import helpers from another ingestion command.
+
 **Quality gate.** Before Gold is written, Silver is checked against
 `config/quality_thresholds.json`: any rejected row gives a warning; more than 1%
 quarantined journeys, passing times or service occurrences, any ambiguous
@@ -137,6 +144,13 @@ command to resume. Each worker gets a 2 GiB Java heap (`--driver-memory` or
 `DAT535_DRIVER_MEMORY` to change it). The rebuild is complete only when every
 date is covered for both providers.
 
+**After the module consolidation:** command names and data paths stay the same,
+but the processing code fingerprints change. The first run with this layout
+rebuilds affected stages into new attempt directories; existing raw data and
+completed outputs are preserved. Run the rebuild command above when all older
+snapshots should use the current implementation, and allow disk space for the
+additional outputs. An unchanged subsequent run reuses its checkpoints.
+
 ## Automation
 
 [`ingest-netex.yml`](.github/workflows/ingest-netex.yml) runs on pushes to `main`,
@@ -207,8 +221,13 @@ one. Never commit credentials.
 app/            Streamlit pages, Gold readers and analysis helpers
 config/         Quality thresholds and route-change evidence
 pipeline/
-  ingestion/    Historical, scheduled, manual and calendar-support ingestion
-  processing/   bronze/ (XML → staging), silver/, gold/, service windows
+  ingestion/    Historical, scheduled, manual and calendar-support commands; netex.py has shared source handling
+  processing/
+    staging.py  Source selection and XML → staging Parquet
+    schemas.py  Explicit NeTEx reader schemas
+    silver.py   Calendar expansion, reference resolution, times and quarantine
+    gold.py     Quality-gated service metrics
+    windows.py  Shared calendar-month service windows
   storage/      ZIP retention, temporary XML restore, verified deduplication
   quality/      Publication gate and independent source-to-Gold checks
   analysis/     Route history and its inspection CLI
@@ -235,7 +254,8 @@ runs write to the ignored `data/`; the school server uses `/srv/dat535/data`:
 
 ## Tests
 
-175 tests in 18 files.
+178 tests in 18 files, including source-preservation, quarantine, checkpoint,
+real Spark transformation and GUI checks.
 
 ```bash
 python3 -B -m unittest discover -s tests -t . -v   # skips Spark/GUI tests when PySpark/Streamlit are missing

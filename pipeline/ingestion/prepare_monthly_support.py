@@ -9,13 +9,14 @@ from datetime import timedelta
 import json
 from pathlib import Path
 
-from .download_entur_netex import parse_month
 from pipeline.common import write_json
-from .generate_provider_dataset import generate
-from pipeline.processing.bronze.staging_sources import load_snapshot_sources
+from pipeline.processing.staging import load_snapshot_sources
 from pipeline.processing.windows import month_bounds
 from pipeline.quality.source_checks import frame_validity
 from pipeline.storage.zip_bronze import with_snapshot_xml
+
+from .generate_provider_dataset import generate
+from .netex import parse_month
 
 
 def existing_source(root, day):

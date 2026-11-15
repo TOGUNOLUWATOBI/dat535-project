@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from pipeline.ingestion import generate_provider_dataset as builder
+from pipeline.ingestion import generate_provider_dataset as builder, netex
 from tests.fixtures import provider_zip
 
 
@@ -22,7 +22,7 @@ class CombinedDatasetTests(unittest.TestCase):
     def extract(self):
         directory = self.root / "xml"
         compact = self.root / "combined.zip"
-        lineage = builder.extract_snapshot(self.source, directory, compact, ["KOL", "AKT"])
+        lineage = netex.extract_snapshot(self.source, directory, compact, ["KOL", "AKT"])
         return directory, compact, lineage
 
     def test_selection_retains_both_providers_and_stops_without_other_shared(self):
@@ -44,7 +44,7 @@ class CombinedDatasetTests(unittest.TestCase):
             for name in names:
                 self.assertEqual((directory / name).read_bytes(), src.read(name))
                 self.assertEqual(dst.read(name), src.read(name))
-        report = builder.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
+        report = netex.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["provider_reference_occurrences"], 6)
         self.assertEqual(set(report["providers"]), {"KOL", "AKT"})
@@ -52,7 +52,7 @@ class CombinedDatasetTests(unittest.TestCase):
     def test_missing_akt_dependency_is_detected(self):
         provider_zip(self.source, missing=True)
         directory, _, lineage = self.extract()
-        report = builder.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
+        report = netex.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["unresolved_provider_references"][0]["ref"], "AKT:Operator:1")
 
@@ -60,7 +60,7 @@ class CombinedDatasetTests(unittest.TestCase):
         provider_zip(self.source, akt_publication="2026-06-15T00:00:00")
         directory, _, lineage = self.extract()
         with self.assertRaisesRegex(RuntimeError, "Historical mismatch in AKT_line.xml"):
-            builder.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
+            netex.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
 
     def run_generation(self, missing=False, xml_only=False, zip_only=False):
         provider_zip(self.source, missing=missing)
@@ -163,7 +163,7 @@ class CombinedDatasetTests(unittest.TestCase):
             '<StopPoint id="AKT:StopPoint:repeat" version="1"/></Line>',
         )
         path.write_text(repeated)
-        report = builder.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
+        report = netex.validate_snapshot(directory, lineage, ["KOL", "AKT"], date(2026, 1, 15))
         self.assertEqual(report["status"], "passed_with_warnings")
         self.assertEqual(report["duplicate_provider_id_version_pairs"], {"AKT": 1})
         self.assertEqual(path.read_text(), repeated)
