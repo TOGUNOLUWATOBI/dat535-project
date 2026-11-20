@@ -131,7 +131,7 @@ def upsert_record(records: list[dict[str, object]], new_record: dict[str, object
 
 
 # %%
-# Query BigQuery for a single (provider, operatingDate) and write raw pages to a temporary Parquet file.
+# Query BigQuery for a single (provider, operatingDate) and write raw Arrow data to a temporary Parquet file.
 def fetch_siri_et_day_to_parquet(
     client: bigquery.Client,
     table_id: str,
@@ -152,29 +152,14 @@ def fetch_siri_et_day_to_parquet(
         ]
     )
     query_job = client.query(query, job_config=job_config)
-    result = query_job.result()
-
-    row_count = 0
-    writer: pq.ParquetWriter | None = None
-    tmp_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        for page in result.pages:
-            page_table = page.to_arrow()
-            if page_table.num_rows == 0:
-                continue
-            if writer is None:
-                writer = pq.ParquetWriter(tmp_path, page_table.schema, compression="snappy")
-            writer.write_table(page_table)
-            row_count += page_table.num_rows
-    finally:
-        if writer is not None:
-            writer.close()
-
-    if row_count == 0:
-        tmp_path.unlink(missing_ok=True)
-
+    arrow_table = query_job.to_arrow()
+    row_count = arrow_table.num_rows
     bytes_billed = int(query_job.total_bytes_billed or 0)
+
+    if row_count > 0:
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(arrow_table, tmp_path, compression="snappy")
+
     return row_count, bytes_billed
 
 # %%
@@ -361,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
     project_id = os.environ.get("GCP_PROJECT_ID", "").strip() or None
     table_id = os.environ.get(
         "KOL_SIRI_ET_BQ_TABLE",
-        "ent-data-sharing-ext-prd.realtime_siri_et.realtime_siri_et",
+        "ent-data-sharing-ext-prd.realtime_siri_et.realtime_siri_et_last_recorded",
     ).strip()
 
     data_root = Path(os.environ.get("DAT535_DATA_ROOT", "/srv/dat535/data"))
