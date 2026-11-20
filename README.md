@@ -36,8 +36,9 @@ Requires Python 3.11+ and, for Spark, Java 17.
 python3 -m venv ~/spark-env      && ~/spark-env/bin/pip install -r requirements.txt
 python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements.txt
 
-# Process an ingested snapshot, build route history, start the GUI
+# Process a snapshot, publish monthly plans, build route history, start the GUI
 bash scripts/run.sh processing --manifest /path/to/metadata/manifest.json --data-root /srv/dat535/data
+bash scripts/run.sh monthly --data-root /srv/dat535/data
 bash scripts/run.sh history --data-root /srv/dat535/data
 bash scripts/run_gui.sh                          # http://localhost:8501
 ```
@@ -49,10 +50,10 @@ bash scripts/run_gui.sh                          # http://localhost:8501
 | **Bronze** | Selected KOL + AKT XML and national stops in a checksum-verified ZIP, with source identity, lineage and validation reports |
 | **Staging** | 16 NeTEx entity tables as Parquet, one row per source occurrence, with file and frame context |
 | **Silver** | Resolved references, typed times, expanded calendars; invalid rows kept with reason codes and copied to `quarantine_*` |
-| **Gold** | Daily line and network service, reconciled to Silver; published only if the quality gate passes |
+| **Gold** | Quality-gated per-publication service metrics, plus reusable monthly plans with daily source provenance and coverage |
 | **History** | Line versions (SCD Type 2), appearances, removals, route and stop changes, and operator-verified renumberings |
 
-Every stage is checkpointed in SQLite: a completed output is reused only when
+Per-snapshot stages are checkpointed in SQLite: a completed output is reused only when
 its input, code and files are unchanged, and failed attempts are kept as
 evidence. Transport facts live in Parquet; SQLite holds only processing state
 (`python3 -m pipeline.checkpoints --state /srv/dat535/data/pipeline_state.sqlite3`
@@ -82,6 +83,7 @@ is used. Override with `DAT535_SPARK_PYTHON` and `DAT535_JAVA_METADATA`.
 | --- | --- |
 | `processing` | One snapshot through staging, Silver and Gold (`--date`, `--all-snapshots`, `--through staging\|silver`) |
 | `rebuild` | Whole-month plans for every registered snapshot, one Spark process per job |
+| `monthly` | Publish monthly plans from completed Gold; no XML or Silver rerun |
 | `history` | Route changes across all completed snapshots (`--force` to rebuild) |
 | `inspect` | Read route history: `summary`, `candidates`, `month`, `line`, `date` |
 | `quality-report` | Before/after Silver quality table and gate results |
@@ -154,13 +156,12 @@ additional outputs. An unchanged subsequent run reuses its checkpoints.
 ## Automation
 
 [`ingest-netex.yml`](.github/workflows/ingest-netex.yml) runs on pushes to `main`,
-manual dispatch and cron `23 8 */3 * *` (08:23 UTC on days 1, 4, 7, … of each
-month, so not exactly every 72 hours) on a self-hosted runner labelled
+manual dispatch and cron `23 8 */1 * *` (08:23 UTC everyday) on a self-hosted runner labelled
 `self-hosted, linux, dat535`.
 
 Each run checks free space, runs the ingestion tests, ingests yesterday's
 Oslo-dated export, consolidates verified duplicate storage, runs the Spark tests,
-processes the snapshot, updates route history and restarts the GUI. Any failure
+processes the snapshot, publishes monthly Gold, updates route history and restarts the GUI. Any failure
 stops the run before the GUI restarts. Only metadata reports are uploaded to
 GitHub (artifact kept 30 days).
 
@@ -193,10 +194,32 @@ the school/cloud and host firewalls. The app has no login. Override
 | Replaced lines | A verified replacement with old/new departures and the operator source |
 | Data checks | Quality-gate results, reconciliation and excluded occurrences |
 
+Monthly source selection runs in the pipeline, before the GUI reads the results.
 Each date uses the newest export that covers it for both operators; exports are
 never added together and missing lines are not filled from older exports.
 Averages divide by all covered calendar days, including days without service.
 Data is cached for 60 seconds; **Refresh data** clears it.
+
+The additional output lives under `gold/entur/monthly/monthly-*/`:
+
+- `daily_line_service`: selected line/day rows, retaining `snapshot_date` and `source_export`.
+- `daily_coverage`: every calendar date, its chosen export, provider selection and coverage flag.
+- `metadata/manifest.json`: source paths and manifest hashes, selection policy, reconciliation and monthly coverage.
+
+Pandas combines the small Gold aggregates; Spark still handles XML, staging,
+Silver and the per-publication metrics. Original publication outputs remain
+available for route history and quality checks. Missing coverage is unknown;
+a covered date without selected service is zero. The GUI's today/future toggle
+only changes the display, never the saved source selection.
+
+Run `bash scripts/run.sh monthly --data-root /srv/dat535/data` once after pulling
+this change, then restart the GUI. This uses the existing completed Gold outputs;
+a historical XML/Silver rebuild is unnecessary. Both scheduled ingestion and
+`rebuild` now publish this output automatically. Source checkpoint hashes are
+verified before publication. Identical inputs reuse a verified monthly output;
+changed inputs/code or damaged outputs produce a new attempt. `current.json`
+changes atomically only after success. The GUI refuses missing or outdated
+monthly results and shows the command to refresh them.
 
 ## Configuration
 
@@ -227,6 +250,7 @@ pipeline/
     schemas.py  Explicit NeTEx reader schemas
     silver.py   Calendar expansion, reference resolution, times and quarantine
     gold.py     Quality-gated service metrics
+    monthly.py  Published monthly plans, coverage, provenance and shared Gold readers
     windows.py  Shared calendar-month service windows
   storage/      ZIP retention, temporary XML restore, verified deduplication
   quality/      Publication gate and independent source-to-Gold checks
@@ -254,8 +278,8 @@ runs write to the ignored `data/`; the school server uses `/srv/dat535/data`:
 
 ## Tests
 
-178 tests in 18 files, including source-preservation, quarantine, checkpoint,
-real Spark transformation and GUI checks.
+Tests cover source preservation, quarantine, checkpoints, monthly publication,
+real Spark transformations and GUI behaviour.
 
 ```bash
 python3 -B -m unittest discover -s tests -t . -v   # skips Spark/GUI tests when PySpark/Streamlit are missing

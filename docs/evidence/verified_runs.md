@@ -302,3 +302,22 @@ April export (34,309 journeys, 1,193,513 passing times) passed with exactly
 The suite has 175 tests in 18 files: unit tests plus Spark tests that run the
 real transformations on small NeTEx fixtures. The workflow runs the ingestion
 tests before every download and the Spark tests before every processing run.
+
+## Reusable monthly Gold — 15 November 2026 (local)
+
+Monthly publication selection moved from the GUI into
+`pipeline.processing.monthly`. The existing local January–September Gold
+outputs were used as inputs; no XML or Silver rebuild was needed.
+
+The saved monthly tables contain **1,918,707 planned departures across all 273
+calendar dates**. Every date's totals, active-line count, departure bounds,
+coverage and source-export choice were compared with the previous GUI
+implementation and matched. The two new Parquet tables occupy 751,019 bytes;
+an unchanged second run reused the verified output. Service dates are stored
+as Parquet DATE values, readable by Spark and pandas.
+
+Regression tests cover whole-publication selection, both-provider coverage,
+missing coverage versus zero service, stale and damaged outputs, source
+checkpoint corruption, failure preservation and inputs changing during a build.
+This verifies the local implementation; it does not record a school-server
+deployment or a new January–November total.

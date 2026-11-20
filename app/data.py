@@ -6,76 +6,15 @@ Nothing here writes to the data root. Pandas reads the small Gold Parquet tables
 directly, so the GUI needs no Spark session.
 """
 
-from datetime import date
-import hashlib
 import json
 from pathlib import Path
-import sqlite3
 
 import pandas as pd
 
 from pipeline.checkpoints import latest_history
-from pipeline.processing.windows import window_signature
+from pipeline.processing.monthly import gold_table, read_monthly, snapshots
 
 REPO = Path(__file__).resolve().parent.parent
-
-
-def snapshots(data_root):
-    """Newest completed Gold per date. Viewing results does not require Silver files or two exports."""
-    root = Path(data_root).resolve()
-    state = root / "pipeline_state.sqlite3"
-    if not state.is_file():
-        raise ValueError(f"Published checkpoint registry not found: {state}")
-    db = sqlite3.connect(state.as_uri() + "?mode=ro", uri=True)
-    db.row_factory = sqlite3.Row
-    try:
-        rows = db.execute("""SELECT s.snapshot_date, a.output_path
-            FROM snapshots s JOIN stage_attempts a USING(snapshot_key)
-            WHERE a.stage='gold' AND a.status='complete'
-            ORDER BY s.snapshot_date, a.finished_at DESC, a.started_at DESC""").fetchall()
-    finally:
-        db.close()
-    chosen = {}
-    for row in rows:
-        day = row["snapshot_date"]
-        if day in chosen:
-            continue
-        gold = Path(row["output_path"])
-        if not gold.is_absolute():
-            gold = root / gold
-        raw = (gold / "metadata/manifest.json").read_bytes()
-        manifest = json.loads(raw)
-        if manifest.get("status") != "complete" or manifest.get("snapshot_date") != day:
-            raise ValueError(f"Registered Gold output has inconsistent publication metadata: {gold}")
-        if "daily_line_service" not in manifest.get("tables", {}):
-            raise ValueError(f"Published Gold output has no daily service table: {gold}")
-        providers = manifest.get("providers")
-        if (not isinstance(providers, list) or not providers or
-                any(not isinstance(p, str) or not p for p in providers) or len(set(providers)) != len(providers)):
-            raise ValueError(f"Published Gold output has an invalid provider selection: {gold}")
-        if date.fromisoformat(manifest["service_to"]) < date.fromisoformat(manifest["service_from"]):
-            raise ValueError(f"Published Gold output has a reversed service window: {gold}")
-        chosen[day] = {"snapshot_date": day, "gold": str(gold), "gold_manifest": manifest,
-                       "gold_manifest_sha256": hashlib.sha256(raw).hexdigest(),
-                       "service_from": manifest["service_from"], "service_to": manifest["service_to"]}
-    items = [chosen[day] for day in sorted(chosen)]
-    selections = {tuple(sorted(item["gold_manifest"]["providers"])) for item in items}
-    windows = {window_signature(i) for i in items}
-    if len(selections) > 1 or len(windows) > 1:
-        raise ValueError("Published exports use different provider selections or service-window definitions")
-    return items
-
-
-def gold_table(items, name):
-    """A Gold table for every snapshot, with ``snapshot_date`` set."""
-    frames = []
-    for item in items:
-        table = item["gold_manifest"]["tables"].get(name)
-        if table:
-            frame = pd.read_parquet(Path(item["gold"]) / table["path"])
-            frame["snapshot_date"] = item["snapshot_date"]
-            frames.append(frame)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 class History:

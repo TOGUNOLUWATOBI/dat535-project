@@ -24,7 +24,8 @@ class GuiInteractionTests(unittest.TestCase):
         from app import data
         from streamlit.testing.v1 import AppTest
         self.enterContext(patch.object(data, "snapshots", return_value=items))
-        self.enterContext(patch.object(data, "gold_table", return_value=daily))
+        from pipeline.processing.monthly import select_plans
+        self.enterContext(patch.object(data, "read_monthly", return_value=select_plans(daily, items)))
         self.enterContext(patch.object(data, "History", side_effect=SystemExit("No route history yet")))
         path = Path(__file__).resolve().parents[1] / "app/gold_app.py"
         app = AppTest.from_file(str(path), default_timeout=20).run()

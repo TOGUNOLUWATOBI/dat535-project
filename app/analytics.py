@@ -81,37 +81,23 @@ def daily_profile(selected, item, through=None):
     return result
 
 
-def daily_month(daily, items, month, providers=None, mode="all", through=None):
-    """Calendar dates with one whole valid published plan per day.
+def daily_month(daily, coverage, month, providers=None, mode="all", through=None):
+    """Summarise published monthly Gold; source selection belongs to the pipeline.
 
-    Overlapping windows use the latest covering export. This is a reconstructed
-    month of published plans, not what was known on each operating date.
-    Missing lines in that export are not backfilled from older plans.
-    Unprocessed dates remain null; covered dates without service are zero.
-    A display cutoff excludes later operating dates without changing source data.
+    UI filters and today's display cutoff never change the saved publication
+    choice. Unknown dates stay null; covered dates without selected service are zero.
     """
     period = pd.Period(month, freq="M")
     end = min(period.end_time, pd.Timestamp(through)) if through is not None else period.end_time
     calendar = pd.DataFrame({"service_date": pd.date_range(period.start_time, end)})
-    sources = []
-    for operating_day in calendar.service_date.dt.strftime("%Y-%m-%d"):
-        def covers(item):
-            # Select a complete combined export independently of the UI filter,
-            # so an operator's count does not change when another is selected.
-            operators = item["gold_manifest"]["providers"]
-            coverage = item["gold_manifest"].get("source_calendar_coverage")
-            return (item["service_from"] <= operating_day <= item["service_to"] and
-                    (coverage is None or all((coverage.get(p) or {}).get("from", "9999") <= operating_day
-                                             <= (coverage.get(p) or {}).get("to", "0000") for p in operators)))
-        candidates = [i["snapshot_date"] for i in items if covers(i)]
-        sources.append(max(candidates) if candidates else None)
-    calendar["source_export"] = pd.Series(sources, dtype="object")
-    calendar["covered"] = calendar.source_export.notna()
-    selected = select_service(daily, providers, mode)
-    selected["service_date"] = pd.to_datetime(selected.service_date)
-    # Join the chosen export first: adding all snapshots would count overlap twice.
-    chosen = selected.merge(calendar, left_on=["service_date", "snapshot_date"],
-                            right_on=["service_date", "source_export"], how="inner")
+    saved = coverage.copy()
+    saved["service_date"] = pd.to_datetime(saved.service_date)
+    calendar = calendar.merge(saved[["service_date", "source_export", "covered"]],
+                              on="service_date", how="left", validate="one_to_one")
+    calendar["covered"] = calendar.covered.eq(True)
+    chosen = select_service(daily, providers, mode)
+    chosen["service_date"] = pd.to_datetime(chosen.service_date)
+    chosen = chosen[chosen.service_date.isin(calendar.service_date)]
     chosen["_line"] = list(zip(chosen.provider, chosen.line_entity_id))
     totals = chosen.groupby("service_date").agg(
         departures=("scheduled_departures", "sum"), active_lines=("_line", "nunique"),
@@ -124,17 +110,17 @@ def daily_month(daily, items, month, providers=None, mode="all", through=None):
     return result
 
 
-def monthly_series(daily, items, providers=None, mode="all", through=None):
+def monthly_series(daily, coverage, providers=None, mode="all", through=None):
     """Monthly totals reconstructed from the same dated plans as Daily service."""
     operators = sorted(providers if providers is not None else
-                       {p for item in items for p in item["gold_manifest"]["providers"]})
-    end = max(i["service_to"] for i in items)
+                       coverage.providers.iloc[0].split(","))
+    end = str(pd.to_datetime(coverage.service_date).max().date())
     end = min(end, str(through)) if through is not None else end
-    months = pd.period_range(min(i["service_from"] for i in items), end, freq="M")
+    months = pd.period_range(pd.to_datetime(coverage.service_date).min(), end, freq="M")
     rows = []
     for month in months:
         for provider in operators:
-            chosen, profile = monthly_plan_rows(daily, items, str(month), [provider], mode, through)
+            chosen, profile = monthly_plan_rows(daily, coverage, str(month), [provider], mode, through)
             known = profile[profile.covered]
             rows.append({"month": str(month), "month_start": month.start_time, "provider": provider,
                          "departures": int(known.departures.sum()) if len(known) else None,
@@ -146,14 +132,12 @@ def monthly_series(daily, items, providers=None, mode="all", through=None):
                                        "covered_days", "calendar_days", "period_days", "period_end", "mean_per_day"])
 
 
-def monthly_plan_rows(daily, items, month, providers=None, mode="all", through=None):
+def monthly_plan_rows(daily, coverage, month, providers=None, mode="all", through=None):
     """Chosen line/day rows for a month, retaining each source export date."""
-    profile = daily_month(daily, items, month, providers, mode, through)
+    profile = daily_month(daily, coverage, month, providers, mode, through)
     selected = select_service(daily, providers, mode)
     selected["service_date"] = pd.to_datetime(selected.service_date)
-    result = selected.merge(profile[profile.covered][["service_date", "source_export"]],
-                            left_on=["service_date", "snapshot_date"],
-                            right_on=["service_date", "source_export"], how="inner")
+    result = selected[selected.service_date.isin(profile.service_date)].copy()
     # The comparison groups by month; source_export keeps the actual observation
     # date for each selected daily plan after replacing this grouping key.
     result["snapshot_date"] = month + "-01"
@@ -173,10 +157,10 @@ def comparison_cutoffs(before, after, through=None):
     return cutoffs
 
 
-def compare_months(daily, items, before, after, providers=None, mode="all", line_snapshots=None, through=None):
+def compare_months(daily, coverage, before, after, providers=None, mode="all", line_snapshots=None, through=None):
     """``compare_exports`` for two reconstructed months (``YYYY-MM``) instead of two exports."""
     cutoffs = comparison_cutoffs(before, after, through)
-    frames = [monthly_plan_rows(daily, items, m, providers, mode, cutoffs[m])[0] for m in (before, after)]
+    frames = [monthly_plan_rows(daily, coverage, m, providers, mode, cutoffs[m])[0] for m in (before, after)]
     attributes = None
     if line_snapshots is not None and not line_snapshots.empty:
         attributes = line_snapshots.sort_values("snapshot_date").copy()

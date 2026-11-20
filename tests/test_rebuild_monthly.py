@@ -116,6 +116,31 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(report["status"], "failed")
             self.assertIn("support unavailable", report["error"])
 
+    def test_successful_rebuild_publishes_monthly_gold_before_completion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            job = {"manifest": "primary.json", "snapshot_date": "2026-01-15", "history_role": "primary"}
+            support = {**job, "snapshot_date": "2026-01-01", "history_role": "calendar_support",
+                       "service_from": "2026-01-01", "service_to": "2026-01-31"}
+            gold = root / "gold/metadata"
+            gold.mkdir(parents=True)
+            (gold / "manifest.json").write_text(json.dumps({
+                "service_from": "2026-01-01", "service_to": "2026-01-31", "providers": ["AKT", "KOL"],
+                "source_calendar_coverage": {p: {"from": "2026-01-01", "to": "2026-01-31"}
+                                             for p in ("AKT", "KOL")}}))
+            result = {"stages": {"gold": {"path": str(gold.parent)}}, "runtime": {"driver_memory": "2g"}}
+            with (
+                patch("pipeline.rebuild_monthly.registered_jobs", return_value=[job]),
+                patch("pipeline.rebuild_monthly.ensure_support_months", return_value=[support]),
+                patch("pipeline.rebuild_monthly.run_worker", return_value=result),
+                patch("pipeline.rebuild_monthly.publish", return_value=(root / "monthly", {}, False)) as publish,
+            ):
+                self.assertEqual(main(["--data-root", temp, "--support-plan", "unused", "--skip-history"]), 0)
+            publish.assert_called_once_with(root)
+            report = json.loads(next(root.glob("rebuilds/monthly-*/manifest.json")).read_text())
+            self.assertEqual(report["status"], "complete")
+            self.assertEqual(report["monthly_gold"], {"path": str(root / "monthly"), "reused": False})
+
     def test_worker_exit_code_is_checked_even_if_result_claims_completion(self):
         with tempfile.TemporaryDirectory() as temp:
             target = Path(temp) / "worker.json"

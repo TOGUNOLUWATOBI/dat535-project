@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   schedule:
-    # At 08:23 UTC on days 1, 4, 7, ... of each month; resets at month boundaries.
-    - cron: '23 8 */3 * *'
+    # At 08:23 UTC everyday.
+    - cron: '23 8 */1 * *'
   workflow_dispatch:
     inputs:
       source_date:
@@ -110,9 +110,14 @@ jobs:
             --manifest "$INGESTION_OUTPUT/metadata/manifest.json" \
             --data-root "$DAT535_DATA_ROOT"
 
+      - name: Publish monthly Gold plans
+        id: monthly
+        if: steps.process.outcome == 'success'
+        run: bash scripts/run.sh monthly --data-root "$DAT535_DATA_ROOT"
+
       - name: Update route history across all processed snapshots
         id: history
-        if: steps.process.outcome == 'success'
+        if: steps.monthly.outcome == 'success'
         shell: bash
         run: |
           bash scripts/run.sh history --data-root "$DAT535_DATA_ROOT"

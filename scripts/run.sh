@@ -5,6 +5,7 @@
 #
 #   processing      one ingestion manifest through checkpointed staging, Silver and Gold
 #   rebuild         whole-month plans for every registered snapshot, one Spark process per job
+#   monthly         publish monthly Gold from existing per-publication Gold (no XML/Silver rerun)
 #   history         route changes across all completed snapshots (after processing)
 #   inspect         print route-history results: summary | candidates | month | line | date
 #   quality-report  before/after Silver quality table and publication-gate results
@@ -18,6 +19,7 @@ set -euo pipefail
 case "${1:-}" in
   processing)     module=pipeline.run_snapshot ;;
   rebuild)        module=pipeline.rebuild_monthly ;;
+  monthly)        module=pipeline.processing.monthly ;;
   history)        module=pipeline.analysis.route_history ;;
   inspect)        module=pipeline.analysis.inspect_history ;;
   quality-report) module=pipeline.quality.report ;;

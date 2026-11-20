@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from pipeline.common import write_json
 from pipeline.processing.windows import month_bounds
+from pipeline.processing.monthly import publish
 from pipeline.spark_runtime import error_text, memory_size, worker_environment
 
 
@@ -175,6 +176,11 @@ def main(argv=None):
         report["coverage"] = audit_coverage(manifests, [j["service_from"][:7] for j in support])
         if not all(v["complete"] for v in report["coverage"].values()):
             raise RuntimeError("Full-month coverage audit failed; missing dates are recorded in the rebuild manifest")
+        report["phase"] = "monthly_gold"
+        write_json(target / "manifest.json", report)
+        monthly, _, reused = publish(args.data_root)
+        report["monthly_gold"] = {"path": str(monthly), "reused": reused}
+        write_json(target / "manifest.json", report)
         if not args.skip_history:
             report["phase"] = "history"
             write_json(target / "manifest.json", report)
