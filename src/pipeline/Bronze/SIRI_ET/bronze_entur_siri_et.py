@@ -131,7 +131,7 @@ def upsert_record(records: list[dict[str, object]], new_record: dict[str, object
 
 
 # %%
-# Query BigQuery for a single (provider, operatingDate) and stream record batches to a temporary Parquet file.
+# Query BigQuery for a single (provider, operatingDate) and write raw pages to a temporary Parquet file.
 def fetch_siri_et_day_to_parquet(
     client: bigquery.Client,
     table_id: str,
@@ -159,13 +159,14 @@ def fetch_siri_et_day_to_parquet(
     tmp_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        for batch in result.to_arrow_batches():
-            if batch.num_rows == 0:
+        for page in result.pages:
+            page_table = page.to_arrow()
+            if page_table.num_rows == 0:
                 continue
             if writer is None:
-                writer = pq.ParquetWriter(tmp_path, batch.schema, compression="snappy")
-            writer.write_batch(batch)
-            row_count += batch.num_rows
+                writer = pq.ParquetWriter(tmp_path, page_table.schema, compression="snappy")
+            writer.write_table(page_table)
+            row_count += page_table.num_rows
     finally:
         if writer is not None:
             writer.close()
@@ -175,7 +176,6 @@ def fetch_siri_et_day_to_parquet(
 
     bytes_billed = int(query_job.total_bytes_billed or 0)
     return row_count, bytes_billed
-
 
 # %%
 # Process target dates, publishing verified Parquet files atomically and updating the manifest per attempt.
