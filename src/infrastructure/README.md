@@ -11,17 +11,24 @@ A lightweight shell utility (`setup_spark.sh`) for configuring and managing a si
 
 Run the following three commands in order to initialize, launch, and verify your cluster:
 
-1. **Configure the cluster** (creates directories and generates Spark configuration files):
+1. **Make the file executable, also fix directory ownership permission** :
+   ```bash
+   chmod +x setup_spark.sh
+   sudo mkdir -p /srv/dat535/spark /srv/dat535/data
+   sudo chown -R ubuntu:ubuntu /srv/dat535
+   ```
+
+2. **Configure the cluster** (creates directories and generates Spark configuration files):
    ```bash
    bash setup_spark.sh setup
    ```
 
-2. **Start the cluster** (launches the Spark Master and Worker daemons):
+3. **Start the cluster** (launches the Spark Master and Worker daemons):
    ```bash
    bash setup_spark.sh start
    ```
 
-3. **Verify the cluster** (runs a test executor job with Parquet read/write validation):
+4. **Verify the cluster** (runs a test executor job with Parquet read/write validation):
    ```bash
    bash setup_spark.sh check
    ```

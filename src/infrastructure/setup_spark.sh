@@ -149,9 +149,9 @@ if [[ "$action" == setup ]]; then
   memory="${DAT535_SPARK_WORKER_MEMORY:-2g}"
   driver_memory="${DAT535_SPARK_DRIVER_MEMORY:-1g}"
   master_port="${DAT535_SPARK_MASTER_PORT:-7077}"
-  master_ui="${DAT535_SPARK_MASTER_UI_PORT:-8080}"
+  master_ui="${DAT535_SPARK_MASTER_UI_PORT:-8090}"
   worker_port="${DAT535_SPARK_WORKER_PORT:-7078}"
-  worker_ui="${DAT535_SPARK_WORKER_UI_PORT:-8081}"
+  worker_ui="${DAT535_SPARK_WORKER_UI_PORT:-8091}"
 
   # Validate CPU core budget against available host cores.
   cpu_count="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
