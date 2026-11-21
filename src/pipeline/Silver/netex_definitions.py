@@ -9,23 +9,6 @@ from pyspark.sql.window import Window
 from . import DEFAULT_PROVIDER
 
 
-def _scope_key_cols() -> list[str]:
-    """Scope columns isolating a single staged snapshot publication."""
-    return [
-        "publication_id",
-        "snapshot_date",
-        "provider",
-        "staging_run",
-        "source_zip_sha256",
-        "source_member",
-        "member_index",
-        "composite_frame_index",
-        "composite_frame_id",
-        "parent_frame_index",
-        "parent_frame_id",
-    ]
-
-
 def _occurrence_struct_col():
     """Preserve exact source occurrence identity so repeated IDs remain traceable."""
     return F.struct(
@@ -47,7 +30,7 @@ def _occurrence_struct_col():
         F.col("parent_frame_version").alias("parent_frame_version"),
         F.col("entity_type").alias("entity_type"),
         F.col("entity_index").alias("entity_index"),
-    ).alias("source_occurrence")
+    )
 
 
 def _load_staged_table(
@@ -59,8 +42,9 @@ def _load_staged_table(
 ) -> DataFrame:
     """Read a staged table across selected run directories and attach publication_id."""
     paths = [f"{r}/{table_name}" for r in run_dirs]
+    base_path = str(run_dirs[0]).rsplit("/", 1)[0]
     df = (
-        spark.read.option("basePath", str(run_dirs[0]).rsplit("/", 1)[0])
+        spark.read.option("basePath", base_path)
         .parquet(*paths)
         .filter(F.upper(F.coalesce(F.col("provider"), F.lit(provider))) == provider.upper())
     )
@@ -132,10 +116,12 @@ def build_lines(
         .withColumn("represented_by_group_ref", F.col("record.RepresentedByGroupRef._ref"))
         .withColumn(
             "line_definition_status",
-            F.when(F.col("line_id").isNull() | (F.trim(F.col("line_id")) == ""), F.lit("missing_line_id"))
-            .otherwise(F.lit("resolved")),
+            F.when(
+                F.col("line_id").isNull() | (F.trim(F.col("line_id")) == ""),
+                F.lit("missing_line_id"),
+            ).otherwise(F.lit("resolved")),
         )
-        .withColumn(_occurrence_struct_col())
+        .withColumn("source_occurrence", _occurrence_struct_col())
     )
 
     return lines_df.select(
@@ -177,7 +163,7 @@ def build_routes(
         .withColumn("flexible_line_ref", F.col("record.FlexibleLineRef._ref"))
         .withColumn("flexible_line_ref_version", F.col("record.FlexibleLineRef._version"))
         .withColumn("_occ_id", F.monotonically_increasing_id())
-        .withColumn(_occurrence_struct_col())
+        .withColumn("source_occurrence", _occurrence_struct_col())
     )
 
     line_targets = lines_df.select(
@@ -221,27 +207,39 @@ def build_routes(
         .drop("_rn", "_occ_id", "_t_pub_id")
         .withColumn(
             "resolved_line_id",
-            F.when(F.col("line_match_count") == 1, F.col("_t_line_id")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("line_match_count") == 1, F.col("_t_line_id")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_line_version",
-            F.when(F.col("line_match_count") == 1, F.col("_t_line_ver")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("line_match_count") == 1, F.col("_t_line_ver")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_line_name",
-            F.when(F.col("line_match_count") == 1, F.col("_t_line_name")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("line_match_count") == 1, F.col("_t_line_name")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_public_code",
-            F.when(F.col("line_match_count") == 1, F.col("_t_public_code")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("line_match_count") == 1, F.col("_t_public_code")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_transport_mode",
-            F.when(F.col("line_match_count") == 1, F.col("_t_transport_mode")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("line_match_count") == 1, F.col("_t_transport_mode")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_operator_ref",
-            F.when(F.col("line_match_count") == 1, F.col("_t_operator_ref")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("line_match_count") == 1, F.col("_t_operator_ref")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "route_resolution_status",
@@ -288,11 +286,17 @@ def build_journey_patterns_and_stops(
     routes_df: DataFrame,
     provider: str = DEFAULT_PROVIDER,
 ) -> tuple[DataFrame, DataFrame]:
-    """Build journey_patterns and journey_pattern_stops with stop-assignment ambiguity tracking."""
+    """Build journey_patterns and journey_pattern_stops with grouped ambiguity counts."""
     raw_jps = _load_staged_table(spark, run_dirs, "journey_patterns", publication_lookup, provider)
-    raw_jpp = _load_staged_table(spark, run_dirs, "journey_pattern_points", publication_lookup, provider)
-    raw_ssps = _load_staged_table(spark, run_dirs, "scheduled_stop_points", publication_lookup, provider)
-    raw_sas = _load_staged_table(spark, run_dirs, "stop_assignments", publication_lookup, provider)
+    raw_jpp = _load_staged_table(
+        spark, run_dirs, "journey_pattern_points", publication_lookup, provider
+    )
+    raw_ssps = _load_staged_table(
+        spark, run_dirs, "scheduled_stop_points", publication_lookup, provider
+    )
+    raw_sas = _load_staged_table(
+        spark, run_dirs, "stop_assignments", publication_lookup, provider
+    )
 
     jp_occ = (
         raw_jps.withColumn("journey_pattern_id", F.col("record._id"))
@@ -301,7 +305,7 @@ def build_journey_patterns_and_stops(
         .withColumn("route_ref", F.col("record.RouteRef._ref"))
         .withColumn("route_ref_version", F.col("record.RouteRef._version"))
         .withColumn("_jp_occ_id", F.monotonically_increasing_id())
-        .withColumn(_occurrence_struct_col())
+        .withColumn("source_occurrence", _occurrence_struct_col())
     )
 
     route_targets = routes_df.select(
@@ -338,38 +342,54 @@ def build_journey_patterns_and_stops(
     journey_patterns_df = (
         jp_joined.withColumn(
             "route_match_count",
-            F.sum(F.when(F.col("_r_route_id").isNotNull(), F.lit(1)).otherwise(F.lit(0))).over(jp_cnt_win),
+            F.sum(F.when(F.col("_r_route_id").isNotNull(), F.lit(1)).otherwise(F.lit(0))).over(
+                jp_cnt_win
+            ),
         )
         .withColumn("_rn", F.row_number().over(jp_pick_win))
         .filter(F.col("_rn") == 1)
-        .drop("_rn", "_r_pub_id")
+        .drop("_rn")
         .withColumn(
             "resolved_route_id",
-            F.when(F.col("route_match_count") == 1, F.col("_r_route_id")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("route_match_count") == 1, F.col("_r_route_id")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_route_version",
-            F.when(F.col("route_match_count") == 1, F.col("_r_route_ver")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("route_match_count") == 1, F.col("_r_route_ver")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_line_id",
-            F.when(F.col("route_match_count") == 1, F.col("_r_line_id")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("route_match_count") == 1, F.col("_r_line_id")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_public_code",
-            F.when(F.col("route_match_count") == 1, F.col("_r_public_code")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("route_match_count") == 1, F.col("_r_public_code")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_transport_mode",
-            F.when(F.col("route_match_count") == 1, F.col("_r_transport_mode")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("route_match_count") == 1, F.col("_r_transport_mode")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_operator_ref",
-            F.when(F.col("route_match_count") == 1, F.col("_r_operator_ref")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("route_match_count") == 1, F.col("_r_operator_ref")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_direction_type",
-            F.when(F.col("route_match_count") == 1, F.col("_r_direction_type")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("route_match_count") == 1, F.col("_r_direction_type")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "journey_pattern_resolution_status",
@@ -380,10 +400,11 @@ def build_journey_patterns_and_stops(
         )
     )
 
-    # Stop assignments per publication + scheduled stop point ref
     sa_clean = (
         raw_sas.withColumn("scheduled_stop_point_ref", F.col("record.ScheduledStopPointRef._ref"))
-        .withColumn("scheduled_stop_point_ref_ver", F.col("record.ScheduledStopPointRef._version"))
+        .withColumn(
+            "scheduled_stop_point_ref_ver", F.col("record.ScheduledStopPointRef._version")
+        )
         .withColumn("quay_ref", F.col("record.QuayRef._ref"))
         .withColumn("quay_ref_version", F.col("record.QuayRef._version"))
         .withColumn("stop_place_ref", F.col("record.StopPlaceRef._ref"))
@@ -416,33 +437,30 @@ def build_journey_patterns_and_stops(
         .withColumn("source_order_raw", F.col("record._order"))
         .withColumn("source_order_int", F.col("record._order").cast("int"))
         .withColumn("scheduled_stop_point_ref", F.col("record.ScheduledStopPointRef._ref"))
-        .withColumn("scheduled_stop_point_ref_version", F.col("record.ScheduledStopPointRef._version"))
+        .withColumn(
+            "scheduled_stop_point_ref_version", F.col("record.ScheduledStopPointRef._version")
+        )
         .withColumn("for_boarding_raw", F.col("record.ForBoarding"))
         .withColumn("for_alighting_raw", F.col("record.ForAlighting"))
         .withColumn("_stop_occ_id", F.monotonically_increasing_id())
-        .withColumn(_occurrence_struct_col())
+        .withColumn("source_occurrence", _occurrence_struct_col())
     )
 
     jpp_with_ssp = jpp_base.join(
         ssp_clean,
         on=(
-            (F.col("publication_id") == F.col("ssp_clean.publication_id"))
-            if False
-            else (
-                (jpp_base["publication_id"] == ssp_clean["publication_id"])
-                & _match_ref_expr(
-                    jpp_base["scheduled_stop_point_ref"],
-                    jpp_base["scheduled_stop_point_ref_version"],
-                    ssp_clean["ssp_id"],
-                    ssp_clean["ssp_version"],
-                )
+            (jpp_base["publication_id"] == ssp_clean["publication_id"])
+            & _match_ref_expr(
+                jpp_base["scheduled_stop_point_ref"],
+                jpp_base["scheduled_stop_point_ref_version"],
+                ssp_clean["ssp_id"],
+                ssp_clean["ssp_version"],
             )
         ),
         how="left",
     ).select(
         jpp_base["*"],
         ssp_clean["stop_point_name"].alias("_ssp_name"),
-        ssp_clean["ssp_id"].alias("_matched_ssp_id"),
     )
 
     jpp_with_sa = jpp_with_ssp.join(
@@ -465,21 +483,32 @@ def build_journey_patterns_and_stops(
         sa_clean["flexible_stop_place_ref"].alias("_sa_flex_stop_place_ref"),
     )
 
-    distinct_quays_per_occ = Window.partitionBy("_stop_occ_id")
+    # Direct grouped countDistinct per _stop_occ_id (collect_set already returns an array)
+    sa_counts_df = jpp_with_sa.groupBy("_stop_occ_id").agg(
+        F.countDistinct(
+            F.coalesce(
+                F.col("_sa_quay_ref"),
+                F.col("_sa_flex_stop_place_ref"),
+                F.col("_sa_stop_place_ref"),
+            )
+        )
+        .cast("int")
+        .alias("stop_assignment_match_count"),
+        F.countDistinct(F.col("_sa_quay_ref"))
+        .cast("int")
+        .alias("quay_candidate_count"),
+    )
+
     pick_sa_win = Window.partitionBy("_stop_occ_id").orderBy(
         F.col("_sa_quay_ref").asc_nulls_last(),
         F.col("_sa_quay_ver").asc_nulls_last(),
         F.col("_sa_flex_stop_place_ref").asc_nulls_last(),
     )
 
-    jps_counted = jpp_with_sa.withColumn(
-        "stop_assignment_match_count",
-        F.countDistinct(
-            F.coalesce(F.col("_sa_quay_ref"), F.col("_sa_flex_stop_place_ref"), F.col("_sa_stop_place_ref"))
-        ).over(distinct_quays_per_occ),
-    ).withColumn(
-        "quay_candidate_count",
-        F.countDistinct(F.col("_sa_quay_ref")).over(distinct_quays_per_occ),
+    jps_counted = (
+        jpp_with_sa.join(sa_counts_df, on="_stop_occ_id", how="left")
+        .withColumn("stop_assignment_match_count", F.coalesce(F.col("stop_assignment_match_count"), F.lit(0)))
+        .withColumn("quay_candidate_count", F.coalesce(F.col("quay_candidate_count"), F.lit(0)))
     )
 
     journey_pattern_stops_df = (
@@ -509,7 +538,8 @@ def build_journey_patterns_and_stops(
             )
             .when(F.col("stop_assignment_match_count") > 1, F.lit("ambiguous"))
             .when(
-                (F.col("stop_assignment_match_count") == 0) & F.col("_sa_flex_stop_place_ref").isNotNull(),
+                (F.col("stop_assignment_match_count") == 0)
+                & F.col("_sa_flex_stop_place_ref").isNotNull(),
                 F.lit("flexible_stop_place_only"),
             )
             .when(F.col("stop_assignment_match_count") == 0, F.lit("missing_stop_assignment"))
@@ -540,7 +570,16 @@ def build_journey_patterns_and_stops(
         )
     )
 
-    jp_out = journey_patterns_df.drop("_jp_occ_id", "_r_route_id", "_r_route_ver", "_r_line_id", "_r_public_code", "_r_transport_mode", "_r_operator_ref", "_r_direction_type").select(
+    jp_out = journey_patterns_df.drop(
+        "_jp_occ_id",
+        "_r_route_id",
+        "_r_route_ver",
+        "_r_line_id",
+        "_r_public_code",
+        "_r_transport_mode",
+        "_r_operator_ref",
+        "_r_direction_type",
+    ).select(
         "publication_id",
         "provider",
         "snapshot_date",
@@ -598,9 +637,11 @@ def build_journeys(
                 ),
             ),
         )
-        .withColumn("validity_conditions", F.col("record.validityConditions.AvailabilityCondition"))
+        .withColumn(
+            "validity_conditions", F.col("record.validityConditions.AvailabilityCondition")
+        )
         .withColumn("_sj_occ_id", F.monotonically_increasing_id())
-        .withColumn(_occurrence_struct_col())
+        .withColumn("source_occurrence", _occurrence_struct_col())
     )
 
     jp_targets = journey_patterns_df.select(
@@ -667,11 +708,15 @@ def build_journeys(
         .drop("_rn", "_sj_occ_id", "_jp_pub_id", "_l_pub_id")
         .withColumn(
             "resolved_journey_pattern_id",
-            F.when(F.col("pattern_match_count") == 1, F.col("_jp_id")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("pattern_match_count") == 1, F.col("_jp_id")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_route_id",
-            F.when(F.col("pattern_match_count") == 1, F.col("_jp_route_id")).otherwise(F.lit(None).cast("string")),
+            F.when(F.col("pattern_match_count") == 1, F.col("_jp_route_id")).otherwise(
+                F.lit(None).cast("string")
+            ),
         )
         .withColumn(
             "resolved_line_id",

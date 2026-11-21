@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql import types as T
 from pyspark.sql.window import Window
 
 from . import DEFAULT_PROVIDER, DEFAULT_TIMEZONE
@@ -25,15 +26,7 @@ def build_siri_et_stop_calls(
     provider: str = DEFAULT_PROVIDER,
     timezone_name: str = DEFAULT_TIMEZONE,
 ) -> DataFrame:
-    """Build canonical siri_et_stop_calls with duplicate accounting and flag checks.
-
-    Args:
-        spark: Active SparkSession.
-        siri_lookup: DataFrame with columns (operating_date, siri_source_file, siri_source_sha256)
-            for dates where a SIRI ET Parquet file is available.
-        provider: Data-provider codespace filter (default 'KOL').
-        timezone_name: Local civil timezone for derived display timestamps (default 'Europe/Oslo').
-    """
+    """Build canonical siri_et_stop_calls with duplicate accounting and flag checks."""
     available_rows = (
         siri_lookup.filter(F.col("siri_source_file").isNotNull())
         .select("operating_date", "siri_source_file", "siri_source_sha256")
@@ -42,7 +35,6 @@ def build_siri_et_stop_calls(
 
     file_paths = [r["siri_source_file"] for r in available_rows.collect()]
     if not file_paths:
-        # Return an empty DataFrame with the canonical schema if no ET files exist
         return _empty_siri_et_df(spark)
 
     raw_et = (
@@ -57,7 +49,6 @@ def build_siri_et_stop_calls(
         .withColumn("operating_date_str", F.date_format(F.col("operating_date"), "yyyy-MM-dd"))
     )
 
-    # Normalize file URI ('file:/srv/...' -> '/srv/...') to join provenance cleanly
     normalized_et = raw_et.withColumn(
         "_norm_file_path",
         F.regexp_replace(F.col("_input_file_uri"), r"^file:(/+)", "/"),
@@ -76,7 +67,6 @@ def build_siri_et_stop_calls(
         how="inner",
     ).drop("_input_file_uri", "_norm_file_path", "_sel_op_date")
 
-    # Standardize columns and preserve original flags/timestamps without mutating meaning
     staged_et = (
         with_prov.withColumn("line_ref", F.col("lineRef"))
         .withColumn("direction_ref", F.col("directionRef"))
@@ -104,7 +94,6 @@ def build_siri_et_stop_calls(
         .withColumn("data_source_name", F.col("dataSourceName"))
     )
 
-    # Collapse ONLY completely identical payload rows, retaining source_occurrences
     exact_payload_cols = [
         "provider",
         "operating_date",
@@ -142,9 +131,6 @@ def build_siri_et_stop_calls(
         F.max("recorded_at_utc").alias("latest_recorded_at_utc"),
     )
 
-    # Assess nominal candidate key uniqueness:
-    # (provider, operating_date, dated_service_journey_id, sequence_nr)
-    # Fall back to service_journey_id only when dated_service_journey_id is null.
     effective_journey_key = F.coalesce(
         F.col("dated_service_journey_id"),
         F.concat_ws(":", F.col("operating_date_str"), F.col("service_journey_id")),
@@ -183,7 +169,6 @@ def build_siri_et_stop_calls(
             .when(F.col("source_occurrences") > 1, F.lit("collapsed_exact_duplicates"))
             .otherwise(F.lit("unique")),
         )
-        # Journey-level cancellation consistency across all stop rows of the journey
         .withColumn(
             "_has_j_cancel_true",
             F.max(F.when(F.col("journey_cancellation") == F.lit(True), 1).otherwise(0)).over(
@@ -232,7 +217,6 @@ def build_siri_et_stop_calls(
             "departure_time_kind",
             _classify_time_kind(F.col("reported_departure_utc"), F.col("estimated_flag")),
         )
-        # Explicit Europe/Oslo civil timestamps derived from UTC instants for display/inspection
         .withColumn(
             "aimed_arrival_local_oslo",
             F.from_utc_timestamp(F.col("aimed_arrival_utc"), timezone_name),
@@ -249,7 +233,6 @@ def build_siri_et_stop_calls(
             "reported_departure_local_oslo",
             F.from_utc_timestamp(F.col("reported_departure_utc"), timezone_name),
         )
-        # Signed ET-only reported delays (seconds with fractional precision)
         .withColumn(
             "reported_arrival_delay_sec",
             F.when(
@@ -267,7 +250,6 @@ def build_siri_et_stop_calls(
                 - F.unix_micros(F.col("aimed_departure_utc")) / F.lit(1_000_000.0),
             ).otherwise(F.lit(None).cast("double")),
         )
-        # Structured quality reason codes per canonical ET record
         .withColumn(
             "quality_reason_codes",
             F.array_compact(
@@ -329,25 +311,38 @@ def build_siri_et_stop_calls(
                 )
             ),
         )
-        # Stable deterministic canonical ID per distinct row
         .withColumn(
             "et_canonical_id",
             F.sha2(
                 F.concat_ws(
-                    "||",
-                    F.coalesce(F.col("provider"), F.lit("")),
-                    F.coalesce(F.col("operating_date_str"), F.lit("")),
-                    F.coalesce(F.col("dated_service_journey_id"), F.lit("")),
-                    F.coalesce(F.col("service_journey_id"), F.lit("")),
-                    F.coalesce(F.col("sequence_nr").cast("string"), F.lit("")),
-                    F.coalesce(F.col("stop_point_ref"), F.lit("")),
-                    F.coalesce(F.col("aimed_arrival_utc").cast("string"), F.lit("")),
-                    F.coalesce(F.col("reported_arrival_utc").cast("string"), F.lit("")),
-                    F.coalesce(F.col("aimed_departure_utc").cast("string"), F.lit("")),
-                    F.coalesce(F.col("reported_departure_utc").cast("string"), F.lit("")),
-                    F.coalesce(F.col("extra_call").cast("string"), F.lit("")),
-                    F.coalesce(F.col("stop_cancellation").cast("string"), F.lit("")),
-                    F.coalesce(F.col("journey_cancellation").cast("string"), F.lit("")),
+                    "\x1f",
+                    F.coalesce(F.col("provider"), F.lit("<NULL>")),
+                    F.coalesce(F.col("operating_date_str"), F.lit("<NULL>")),
+                    F.coalesce(F.col("siri_source_file"), F.lit("<NULL>")),
+                    F.coalesce(F.col("siri_source_sha256"), F.lit("<NULL>")),
+                    F.coalesce(F.col("line_ref"), F.lit("<NULL>")),
+                    F.coalesce(F.col("direction_ref"), F.lit("<NULL>")),
+                    F.coalesce(F.col("day_of_the_week").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("service_journey_id"), F.lit("<NULL>")),
+                    F.coalesce(F.col("dated_service_journey_id"), F.lit("<NULL>")),
+                    F.coalesce(F.col("operator_ref"), F.lit("<NULL>")),
+                    F.coalesce(F.col("vehicle_mode"), F.lit("<NULL>")),
+                    F.coalesce(F.col("extra_journey").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("journey_cancellation").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("stop_point_ref"), F.lit("<NULL>")),
+                    F.coalesce(F.col("sequence_nr").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("stop_point_name"), F.lit("<NULL>")),
+                    F.coalesce(F.col("origin_name"), F.lit("<NULL>")),
+                    F.coalesce(F.col("destination_name"), F.lit("<NULL>")),
+                    F.coalesce(F.col("extra_call").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("stop_cancellation").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("estimated_flag").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("aimed_arrival_utc").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("reported_arrival_utc").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("aimed_departure_utc").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("reported_departure_utc").cast("string"), F.lit("<NULL>")),
+                    F.coalesce(F.col("data_source"), F.lit("<NULL>")),
+                    F.coalesce(F.col("data_source_name"), F.lit("<NULL>")),
                 ),
                 256,
             ),
@@ -406,8 +401,6 @@ def build_siri_et_stop_calls(
 
 def _empty_siri_et_df(spark: SparkSession) -> DataFrame:
     """Return an empty DataFrame matching build_siri_et_stop_calls output columns."""
-    from pyspark.sql import types as T
-
     schema = T.StructType(
         [
             T.StructField("et_canonical_id", T.StringType(), False),

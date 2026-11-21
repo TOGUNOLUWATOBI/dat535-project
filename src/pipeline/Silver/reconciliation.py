@@ -30,7 +30,6 @@ def build_reconciled_stop_calls(
         "siri_file_available",
     ).dropDuplicates()
 
-    # Journey-level status lookup per (publication_id, operating_date, service_journey_id)
     jsd_lookup = (
         journey_service_dates_df.withColumn(
             "_jsd_rank",
@@ -53,7 +52,6 @@ def build_reconciled_stop_calls(
         )
     )
 
-    # Number repeated visits to the same quay within a planned journey call sequence
     p_base = (
         netex_stop_calls_df.withColumn(
             "_p_order_key",
@@ -64,12 +62,32 @@ def build_reconciled_stop_calls(
             ),
         )
         .withColumn(
+            "_p_seq_rank",
+            F.dense_rank().over(
+                Window.partitionBy("publication_id", "operating_date", "service_journey_id").orderBy(
+                    "_p_order_key", "passing_time_index"
+                )
+            ),
+        )
+        .withColumn(
+            "_p_quay_visit_cnt",
+            F.when(
+                F.col("quay_id").isNotNull(),
+                F.count(F.lit(1)).over(
+                    Window.partitionBy(
+                        "publication_id", "operating_date", "service_journey_id", "quay_id"
+                    )
+                ),
+            ).otherwise(F.lit(0)),
+        )
+        .withColumn(
             "_p_visit_nr",
             F.when(
                 F.col("quay_id").isNotNull(),
                 F.dense_rank().over(
-                    Window.partitionBy("publication_id", "operating_date", "service_journey_id", "quay_id")
-                    .orderBy("_p_order_key", "passing_time_index")
+                    Window.partitionBy(
+                        "publication_id", "operating_date", "service_journey_id", "quay_id"
+                    ).orderBy("_p_order_key", "passing_time_index")
                 ),
             ).otherwise(F.lit(None).cast("int")),
         )
@@ -89,30 +107,58 @@ def build_reconciled_stop_calls(
         )
     )
 
-    # Number repeated visits to the same stopPointRef within a reported journey
-    e_base = (
-        siri_et_stop_calls_df.withColumn(
-            "_e_order_key",
-            F.coalesce(F.col("sequence_nr"), F.lit(9223372036854775807)),
-        )
-        .withColumn(
-            "_e_visit_nr",
-            F.when(
-                F.col("stop_point_ref").isNotNull(),
-                F.dense_rank().over(
-                    Window.partitionBy("provider", "operating_date", "service_journey_id", "stop_point_ref")
-                    .orderBy("_e_order_key", "aimed_departure_utc", "aimed_arrival_utc", "et_canonical_id")
-                ),
-            ).otherwise(F.lit(None).cast("int")),
-        )
+    e_base = siri_et_stop_calls_df.withColumn(
+        "_e_order_key",
+        F.coalesce(F.col("sequence_nr"), F.lit(9223372036854775807)),
+    ).withColumn(
+        "_e_seq_rank",
+        F.dense_rank().over(
+            Window.partitionBy("provider", "operating_date", "service_journey_id").orderBy(
+                "_e_order_key",
+                "aimed_departure_utc",
+                "aimed_arrival_utc",
+                "et_canonical_id",
+            )
+        ),
+    ).withColumn(
+        "_e_quay_visit_cnt",
+        F.when(
+            F.col("stop_point_ref").isNotNull(),
+            F.count(F.lit(1)).over(
+                Window.partitionBy(
+                    "provider", "operating_date", "service_journey_id", "stop_point_ref"
+                )
+            ),
+        ).otherwise(F.lit(0)),
+    ).withColumn(
+        "_e_visit_nr",
+        F.when(
+            F.col("stop_point_ref").isNotNull(),
+            F.dense_rank().over(
+                Window.partitionBy(
+                    "provider", "operating_date", "service_journey_id", "stop_point_ref"
+                ).orderBy(
+                    "_e_order_key",
+                    "aimed_departure_utc",
+                    "aimed_arrival_utc",
+                    "et_canonical_id",
+                )
+            ),
+        ).otherwise(F.lit(None).cast("int")),
     )
 
-    # Candidate pairs sharing (provider, operating_date, service_journey_id, stop/quay, visit_nr)
-    # where both sides are scheduled/present
-    p_sched = p_base.filter(F.col("planned_call_status") == "resolved")
-    p_non_sched_or_unresolved = p_base.filter(F.col("planned_call_status") != "resolved")
+    # Single-event timestamp errors do not disqualify stop/journey matching or the other event
+    matchable_planned_statuses = [
+        "resolved",
+        "resolved_with_arrival_time_error",
+        "resolved_with_departure_time_error",
+    ]
+    p_sched = p_base.filter(F.col("planned_call_status").isin(matchable_planned_statuses))
+    p_non_sched_or_unresolved = p_base.filter(
+        ~F.col("planned_call_status").isin(matchable_planned_statuses)
+    )
 
-    cand_pairs = (
+    raw_pairs = (
         p_sched.alias("p")
         .join(
             e_base.alias("e"),
@@ -122,11 +168,28 @@ def build_reconciled_stop_calls(
                 & (F.col("p.service_journey_id") == F.col("e.service_journey_id"))
                 & F.col("p.quay_id").isNotNull()
                 & (F.col("p.quay_id") == F.col("e.stop_point_ref"))
-                & F.col("p._p_visit_nr").isNotNull()
-                & (F.col("p._p_visit_nr") == F.col("e._e_visit_nr"))
             ),
             how="inner",
         )
+        .withColumn(
+            "_is_repeated_quay",
+            (F.col("p._p_quay_visit_cnt") > 1) | (F.col("e._e_quay_visit_cnt") > 1),
+        )
+        .withColumn(
+            "_visit_and_order_consistent",
+            F.when(
+                ~F.col("_is_repeated_quay"),
+                F.lit(True),
+            ).otherwise(
+                (F.col("p._p_visit_nr") == F.col("e._e_visit_nr"))
+                & (F.col("p._p_quay_visit_cnt") == F.col("e._e_quay_visit_cnt"))
+                & (F.abs(F.col("p._p_seq_rank") - F.col("e._e_seq_rank")) <= F.lit(2))
+            ),
+        )
+    )
+
+    consistent_scored = (
+        raw_pairs.filter(F.col("_visit_and_order_consistent"))
         .withColumn(
             "_p_cand_cnt",
             F.count(F.lit(1)).over(Window.partitionBy("p.planned_call_id")),
@@ -135,30 +198,70 @@ def build_reconciled_stop_calls(
             "_e_cand_cnt",
             F.count(F.lit(1)).over(Window.partitionBy("e.et_canonical_id")),
         )
-        .withColumn(
-            "_is_unambiguous_pair",
-            (F.col("_p_cand_cnt") == 1) & (F.col("_e_cand_cnt") == 1),
-        )
     )
 
-    accepted_pairs = cand_pairs.filter(F.col("_is_unambiguous_pair"))
+    accepted_pairs = consistent_scored.filter(
+        (F.col("_p_cand_cnt") == 1) & (F.col("_e_cand_cnt") == 1)
+    )
 
-    # Planned calls matched unambiguously to one ET call
     matched_p_ids = accepted_pairs.select(F.col("p.planned_call_id").alias("_m_p_id")).distinct()
     matched_e_ids = accepted_pairs.select(F.col("e.et_canonical_id").alias("_m_e_id")).distinct()
 
+    all_candidate_p_ids = raw_pairs.select(F.col("p.planned_call_id").alias("_c_p_id")).distinct()
+    all_candidate_e_ids = raw_pairs.select(F.col("e.et_canonical_id").alias("_c_e_id")).distinct()
+
     ambiguous_p_ids = (
-        cand_pairs.filter(~F.col("_is_unambiguous_pair"))
-        .select(F.col("p.planned_call_id").alias("_a_p_id"))
+        all_candidate_p_ids.join(
+            matched_p_ids, F.col("_c_p_id") == F.col("_m_p_id"), "left_anti"
+        )
+        .select(F.col("_c_p_id").alias("_a_p_id"))
         .distinct()
     )
     ambiguous_e_ids = (
-        cand_pairs.filter(~F.col("_is_unambiguous_pair"))
-        .select(F.col("e.et_canonical_id").alias("_a_e_id"))
+        all_candidate_e_ids.join(
+            matched_e_ids, F.col("_c_e_id") == F.col("_m_e_id"), "left_anti"
+        )
+        .select(F.col("_c_e_id").alias("_a_e_id"))
         .distinct()
     )
 
-    # Planned resolved calls that have neither an accepted match nor an ambiguous pair
+    ambiguous_planned_df = (
+        p_sched.join(ambiguous_p_ids, F.col("planned_call_id") == F.col("_a_p_id"), "inner")
+        .drop("_a_p_id")
+        .join(
+            selected_dates,
+            on=["publication_id", "provider", "snapshot_date", "operating_date"],
+            how="left",
+        )
+        .withColumn("reconciliation_status", F.lit("ambiguous"))
+        .withColumn("et_canonical_id", F.lit(None).cast("string"))
+        .withColumn("dated_service_journey_id", F.lit(None).cast("string"))
+        .withColumn("operator_ref", F.col("resolved_operator_ref"))
+        .withColumn("line_ref", F.col("resolved_line_id"))
+        .withColumn("sequence_nr", F.lit(None).cast("long"))
+        .withColumn("extra_journey", F.lit(None).cast("boolean"))
+        .withColumn("extra_call", F.lit(None).cast("boolean"))
+        .withColumn("journey_cancellation", F.lit(None).cast("boolean"))
+        .withColumn("journey_cancellation_state", F.lit("unknown"))
+        .withColumn("stop_cancellation", F.lit(None).cast("boolean"))
+        .withColumn("stop_cancellation_state", F.lit("unknown"))
+        .withColumn("estimated_flag", F.lit(None).cast("boolean"))
+        .withColumn("arrival_time_kind", F.lit("missing"))
+        .withColumn("departure_time_kind", F.lit("missing"))
+        .withColumn("aimed_arrival_utc", F.lit(None).cast("timestamp"))
+        .withColumn("reported_arrival_utc", F.lit(None).cast("timestamp"))
+        .withColumn("aimed_departure_utc", F.lit(None).cast("timestamp"))
+        .withColumn("reported_departure_utc", F.lit(None).cast("timestamp"))
+        .withColumn("reported_arrival_delay_sec", F.lit(None).cast("double"))
+        .withColumn("reported_departure_delay_sec", F.lit(None).cast("double"))
+        .withColumn("source_occurrences", F.lit(None).cast("long"))
+        .withColumn("candidate_key_variant_count", F.lit(None).cast("int"))
+        .withColumn("duplicate_status", F.lit(None).cast("string"))
+        .withColumn("et_quality_reason_codes", F.array().cast("array<string>"))
+        .withColumn("siri_source_file", F.lit(None).cast("string"))
+        .withColumn("siri_source_sha256", F.lit(None).cast("string"))
+    )
+
     planned_only_df = (
         p_sched.join(matched_p_ids, F.col("planned_call_id") == F.col("_m_p_id"), "left_anti")
         .join(ambiguous_p_ids, F.col("planned_call_id") == F.col("_a_p_id"), "left_anti")
@@ -196,7 +299,6 @@ def build_reconciled_stop_calls(
         .withColumn("siri_source_sha256", F.lit(None).cast("string"))
     )
 
-    # Planned calls that could not be resolved into a clean fixed planned call
     plan_unresolved_df = (
         p_non_sched_or_unresolved.join(
             selected_dates,
@@ -232,7 +334,6 @@ def build_reconciled_stop_calls(
         .withColumn("siri_source_sha256", F.lit(None).cast("string"))
     )
 
-    # Matched pairs
     matched_df = (
         accepted_pairs.select(
             F.col("p.publication_id").alias("publication_id"),
@@ -257,7 +358,9 @@ def build_reconciled_stop_calls(
             F.col("p.is_flexible_window").alias("is_flexible_window"),
             F.col("p.planned_call_status").alias("planned_call_status"),
             F.col("p.planned_arrival_utc").alias("planned_arrival_utc"),
+            F.col("p.planned_arrival_time_error").alias("planned_arrival_time_error"),
             F.col("p.planned_departure_utc").alias("planned_departure_utc"),
+            F.col("p.planned_departure_time_error").alias("planned_departure_time_error"),
             F.col("p.planned_call_id").alias("planned_call_id"),
             F.col("e.et_canonical_id").alias("et_canonical_id"),
             F.col("e.dated_service_journey_id").alias("dated_service_journey_id"),
@@ -294,18 +397,25 @@ def build_reconciled_stop_calls(
         .withColumn("reconciliation_status", F.lit("matched"))
     )
 
-    # Reported calls not accepted in a 1-to-1 match: either ambiguous or reported_only
     unmatched_or_amb_et = (
         e_base.join(matched_e_ids, F.col("et_canonical_id") == F.col("_m_e_id"), "left_anti")
         .join(
-            selected_dates.select("provider", "operating_date", "publication_id", "snapshot_date", "siri_file_available"),
+            selected_dates.select(
+                "provider",
+                "operating_date",
+                "publication_id",
+                "snapshot_date",
+                "siri_file_available",
+            ),
             on=["provider", "operating_date"],
             how="left",
         )
         .join(ambiguous_e_ids, F.col("et_canonical_id") == F.col("_a_e_id"), "left")
         .withColumn(
             "reconciliation_status",
-            F.when(F.col("_a_e_id").isNotNull(), F.lit("ambiguous")).otherwise(F.lit("reported_only")),
+            F.when(F.col("_a_e_id").isNotNull(), F.lit("ambiguous")).otherwise(
+                F.lit("reported_only")
+            ),
         )
         .drop("_a_e_id")
         .withColumn("service_journey_version", F.lit(None).cast("string"))
@@ -324,7 +434,9 @@ def build_reconciled_stop_calls(
         .withColumn("is_flexible_window", F.lit(False))
         .withColumn("planned_call_status", F.lit(None).cast("string"))
         .withColumn("planned_arrival_utc", F.lit(None).cast("timestamp"))
+        .withColumn("planned_arrival_time_error", F.lit(None).cast("string"))
         .withColumn("planned_departure_utc", F.lit(None).cast("timestamp"))
+        .withColumn("planned_departure_time_error", F.lit(None).cast("string"))
         .withColumn("planned_call_id", F.lit(None).cast("string"))
         .withColumnRenamed("quality_reason_codes", "et_quality_reason_codes")
     )
@@ -369,9 +481,11 @@ def build_reconciled_stop_calls(
         "arrival_time_kind",
         "departure_time_kind",
         "planned_arrival_utc",
+        "planned_arrival_time_error",
         "aimed_arrival_utc",
         "reported_arrival_utc",
         "planned_departure_utc",
+        "planned_departure_time_error",
         "aimed_departure_utc",
         "reported_departure_utc",
         "reported_arrival_delay_sec",
@@ -386,6 +500,7 @@ def build_reconciled_stop_calls(
 
     combined = (
         matched_df.select(*union_cols)
+        .unionByName(ambiguous_planned_df.select(*union_cols))
         .unionByName(planned_only_df.select(*union_cols))
         .unionByName(plan_unresolved_df.select(*union_cols))
         .unionByName(unmatched_or_amb_et.select(*union_cols))
@@ -396,25 +511,35 @@ def build_reconciled_stop_calls(
         )
     )
 
-    # Compute explicit comparison diagnostics & metric-specific eligibility flags
     with_metrics_and_eligibility = (
         combined.withColumn(
             "netex_arrival_deviation_sec",
-            _diff_seconds_col(F.col("reported_arrival_utc"), F.col("planned_arrival_utc")),
+            F.when(
+                F.col("planned_arrival_time_error").isNull(),
+                _diff_seconds_col(F.col("reported_arrival_utc"), F.col("planned_arrival_utc")),
+            ).otherwise(F.lit(None).cast("double")),
         )
         .withColumn(
             "netex_departure_deviation_sec",
-            _diff_seconds_col(F.col("reported_departure_utc"), F.col("planned_departure_utc")),
+            F.when(
+                F.col("planned_departure_time_error").isNull(),
+                _diff_seconds_col(F.col("reported_departure_utc"), F.col("planned_departure_utc")),
+            ).otherwise(F.lit(None).cast("double")),
         )
         .withColumn(
             "planned_arrival_disagreement_sec",
-            _diff_seconds_col(F.col("aimed_arrival_utc"), F.col("planned_arrival_utc")),
+            F.when(
+                F.col("planned_arrival_time_error").isNull(),
+                _diff_seconds_col(F.col("aimed_arrival_utc"), F.col("planned_arrival_utc")),
+            ).otherwise(F.lit(None).cast("double")),
         )
         .withColumn(
             "planned_departure_disagreement_sec",
-            _diff_seconds_col(F.col("aimed_departure_utc"), F.col("planned_departure_utc")),
+            F.when(
+                F.col("planned_departure_time_error").isNull(),
+                _diff_seconds_col(F.col("aimed_departure_utc"), F.col("planned_departure_utc")),
+            ).otherwise(F.lit(None).cast("double")),
         )
-        # Base shared validity blockers
         .withColumn(
             "_not_cancelled",
             (F.col("journey_cancellation_state") == "not_cancelled")
@@ -428,7 +553,6 @@ def build_reconciled_stop_calls(
             "_not_flexible",
             ~F.coalesce(F.col("is_flexible_window"), F.lit(False)),
         )
-        # 1. eligible_reported_departure_delay
         .withColumn(
             "eligible_reported_departure_delay",
             (F.col("departure_time_kind") == "recorded")
@@ -441,19 +565,26 @@ def build_reconciled_stop_calls(
             "exclusion_reported_departure_delay",
             F.array_compact(
                 F.array(
-                    F.when(F.col("departure_time_kind") == "missing", F.lit("missing_recorded_departure")),
+                    F.when(
+                        F.col("departure_time_kind") == "missing",
+                        F.lit("missing_recorded_departure"),
+                    ),
                     F.when(F.col("departure_time_kind") == "estimated", F.lit("estimated_time")),
                     F.when(
                         F.col("departure_time_kind") == "unresolved",
                         F.lit("unknown_time_classification"),
                     ),
-                    F.when(F.col("aimed_departure_utc").isNull(), F.lit("missing_aimed_departure")),
+                    F.when(
+                        F.col("aimed_departure_utc").isNull(), F.lit("missing_aimed_departure")
+                    ),
                     F.when(
                         F.col("duplicate_status") == "conflicting_candidate_key",
                         F.lit("conflicting_reported_record"),
                     ),
                     F.when(
-                        F.col("journey_cancellation_state").isin("cancelled", "conflicting_across_stops"),
+                        F.col("journey_cancellation_state").isin(
+                            "cancelled", "conflicting_across_stops"
+                        ),
                         F.lit("cancelled_journey"),
                     ),
                     F.when(F.col("stop_cancellation_state") == "cancelled", F.lit("cancelled_stop")),
@@ -468,7 +599,6 @@ def build_reconciled_stop_calls(
                 )
             ),
         )
-        # 2. eligible_reported_arrival_delay
         .withColumn(
             "eligible_reported_arrival_delay",
             (F.col("arrival_time_kind") == "recorded")
@@ -481,7 +611,9 @@ def build_reconciled_stop_calls(
             "exclusion_reported_arrival_delay",
             F.array_compact(
                 F.array(
-                    F.when(F.col("arrival_time_kind") == "missing", F.lit("missing_recorded_arrival")),
+                    F.when(
+                        F.col("arrival_time_kind") == "missing", F.lit("missing_recorded_arrival")
+                    ),
                     F.when(F.col("arrival_time_kind") == "estimated", F.lit("estimated_time")),
                     F.when(
                         F.col("arrival_time_kind") == "unresolved",
@@ -493,7 +625,9 @@ def build_reconciled_stop_calls(
                         F.lit("conflicting_reported_record"),
                     ),
                     F.when(
-                        F.col("journey_cancellation_state").isin("cancelled", "conflicting_across_stops"),
+                        F.col("journey_cancellation_state").isin(
+                            "cancelled", "conflicting_across_stops"
+                        ),
                         F.lit("cancelled_journey"),
                     ),
                     F.when(F.col("stop_cancellation_state") == "cancelled", F.lit("cancelled_stop")),
@@ -508,12 +642,12 @@ def build_reconciled_stop_calls(
                 )
             ),
         )
-        # 3. eligible_netex_departure_comparison
         .withColumn(
             "eligible_netex_departure_comparison",
             (F.col("reconciliation_status") == "matched")
             & (F.col("departure_time_kind") == "recorded")
             & F.col("planned_departure_utc").isNotNull()
+            & F.col("planned_departure_time_error").isNull()
             & F.col("_dup_ok")
             & F.col("_not_cancelled")
             & F.col("_not_flexible"),
@@ -522,13 +656,34 @@ def build_reconciled_stop_calls(
             "exclusion_netex_departure_comparison",
             F.array_compact(
                 F.array(
-                    F.when(F.col("reconciliation_status") == "planned_only", F.lit("unmatched_planned_call")),
-                    F.when(F.col("reconciliation_status") == "reported_only", F.lit("unmatched_reported_call")),
-                    F.when(F.col("reconciliation_status") == "ambiguous", F.lit("ambiguous_stop_visit")),
-                    F.when(F.col("reconciliation_status") == "plan_unresolved", F.lit("unresolved_calendar")),
-                    F.when(F.col("departure_time_kind") == "missing", F.lit("missing_recorded_departure")),
+                    F.when(
+                        F.col("reconciliation_status") == "planned_only",
+                        F.lit("unmatched_planned_call"),
+                    ),
+                    F.when(
+                        F.col("reconciliation_status") == "reported_only",
+                        F.lit("unmatched_reported_call"),
+                    ),
+                    F.when(
+                        F.col("reconciliation_status") == "ambiguous",
+                        F.lit("ambiguous_stop_visit"),
+                    ),
+                    F.when(
+                        F.col("reconciliation_status") == "plan_unresolved",
+                        F.lit("unresolved_calendar"),
+                    ),
+                    F.when(
+                        F.col("departure_time_kind") == "missing",
+                        F.lit("missing_recorded_departure"),
+                    ),
                     F.when(F.col("departure_time_kind") == "estimated", F.lit("estimated_time")),
-                    F.when(F.col("planned_departure_utc").isNull(), F.lit("missing_netex_departure")),
+                    F.when(
+                        F.col("planned_departure_utc").isNull(), F.lit("missing_netex_departure")
+                    ),
+                    F.when(
+                        F.col("planned_departure_time_error").isNotNull(),
+                        F.concat(F.lit("planned_departure_error:"), F.col("planned_departure_time_error")),
+                    ),
                     F.when(
                         F.col("duplicate_status") == "conflicting_candidate_key",
                         F.lit("conflicting_reported_record"),
@@ -541,12 +696,12 @@ def build_reconciled_stop_calls(
                 )
             ),
         )
-        # 4. eligible_netex_arrival_comparison
         .withColumn(
             "eligible_netex_arrival_comparison",
             (F.col("reconciliation_status") == "matched")
             & (F.col("arrival_time_kind") == "recorded")
             & F.col("planned_arrival_utc").isNotNull()
+            & F.col("planned_arrival_time_error").isNull()
             & F.col("_dup_ok")
             & F.col("_not_cancelled")
             & F.col("_not_flexible"),
@@ -555,13 +710,31 @@ def build_reconciled_stop_calls(
             "exclusion_netex_arrival_comparison",
             F.array_compact(
                 F.array(
-                    F.when(F.col("reconciliation_status") == "planned_only", F.lit("unmatched_planned_call")),
-                    F.when(F.col("reconciliation_status") == "reported_only", F.lit("unmatched_reported_call")),
-                    F.when(F.col("reconciliation_status") == "ambiguous", F.lit("ambiguous_stop_visit")),
-                    F.when(F.col("reconciliation_status") == "plan_unresolved", F.lit("unresolved_calendar")),
-                    F.when(F.col("arrival_time_kind") == "missing", F.lit("missing_recorded_arrival")),
+                    F.when(
+                        F.col("reconciliation_status") == "planned_only",
+                        F.lit("unmatched_planned_call"),
+                    ),
+                    F.when(
+                        F.col("reconciliation_status") == "reported_only",
+                        F.lit("unmatched_reported_call"),
+                    ),
+                    F.when(
+                        F.col("reconciliation_status") == "ambiguous",
+                        F.lit("ambiguous_stop_visit"),
+                    ),
+                    F.when(
+                        F.col("reconciliation_status") == "plan_unresolved",
+                        F.lit("unresolved_calendar"),
+                    ),
+                    F.when(
+                        F.col("arrival_time_kind") == "missing", F.lit("missing_recorded_arrival")
+                    ),
                     F.when(F.col("arrival_time_kind") == "estimated", F.lit("estimated_time")),
                     F.when(F.col("planned_arrival_utc").isNull(), F.lit("missing_netex_arrival")),
+                    F.when(
+                        F.col("planned_arrival_time_error").isNotNull(),
+                        F.concat(F.lit("planned_arrival_error:"), F.col("planned_arrival_time_error")),
+                    ),
                     F.when(
                         F.col("duplicate_status") == "conflicting_candidate_key",
                         F.lit("conflicting_reported_record"),
@@ -574,11 +747,16 @@ def build_reconciled_stop_calls(
                 )
             ),
         )
-        # 5. eligible_planned_call_coverage
         .withColumn(
             "eligible_planned_call_coverage",
             F.col("planned_call_id").isNotNull()
-            & (F.col("planned_call_status") == "resolved")
+            & (
+                F.col("planned_call_status").isin(
+                    "resolved",
+                    "resolved_with_arrival_time_error",
+                    "resolved_with_departure_time_error",
+                )
+            )
             & F.col("quay_id").isNotNull(),
         )
         .withColumn(
@@ -601,13 +779,12 @@ def build_reconciled_stop_calls(
                         F.lit("unresolved_pattern_stop"),
                     ),
                     F.when(
-                        F.col("planned_call_status") == "invalid_planned_timestamp",
-                        F.lit("invalid_planned_timestamp"),
+                        F.col("planned_call_status") == "invalid_planned_timestamps",
+                        F.lit("invalid_planned_timestamps"),
                     ),
                 )
             ),
         )
-        # 6. eligible_reported_cancellation_analysis
         .withColumn(
             "eligible_reported_cancellation_analysis",
             F.col("et_canonical_id").isNotNull()

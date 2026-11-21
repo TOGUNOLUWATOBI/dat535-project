@@ -58,8 +58,7 @@ def _local_clock_to_utc(
 ) -> tuple[str | None, str | None, int | None, str | None]:
     """Convert NeTEx local clock + day offset on operating_date into UTC ISO timestamp.
 
-    Returns:
-        (utc_iso, oslo_local_iso, resolved_day_offset, error_code)
+    Detects both nonexistent spring DST wall times and repeated autumn DST wall times.
     """
     if raw_time_str is None or str(raw_time_str).strip() == "":
         return None, None, None, None
@@ -94,7 +93,7 @@ def _local_clock_to_utc(
 
     try:
         tz = ZoneInfo(tz_name)
-        local_dt = datetime(
+        naive_dt = datetime(
             civil_date.year,
             civil_date.month,
             civil_date.day,
@@ -102,18 +101,26 @@ def _local_clock_to_utc(
             minutes,
             seconds,
             micros,
-            tzinfo=tz,
         )
-        # Detect nonexistent DST spring-forward wall times by round-tripping through UTC
-        utc_dt = local_dt.astimezone(ZoneInfo("UTC"))
-        roundtrip_local = utc_dt.astimezone(tz)
+        dt_fold0 = naive_dt.replace(tzinfo=tz, fold=0)
+        dt_fold1 = naive_dt.replace(tzinfo=tz, fold=1)
+
+        utc_fold0 = dt_fold0.astimezone(ZoneInfo("UTC"))
+        utc_fold1 = dt_fold1.astimezone(ZoneInfo("UTC"))
+
+        rt0 = utc_fold0.astimezone(tz)
         if (
-            roundtrip_local.hour != norm_hour
-            or roundtrip_local.minute != minutes
-            or roundtrip_local.date() != civil_date
+            rt0.hour != norm_hour
+            or rt0.minute != minutes
+            or rt0.second != seconds
+            or rt0.date() != civil_date
         ):
-            return None, local_dt.isoformat(), total_day_offset, "nonexistent_dst_local_time"
-        return utc_dt.isoformat(), local_dt.isoformat(), total_day_offset, None
+            return None, dt_fold0.isoformat(), total_day_offset, "nonexistent_dst_local_time"
+
+        if utc_fold0 != utc_fold1:
+            return None, naive_dt.isoformat(), total_day_offset, "ambiguous_dst_local_time"
+
+        return utc_fold0.isoformat(), dt_fold0.isoformat(), total_day_offset, None
     except Exception:
         return None, None, total_day_offset, "timezone_conversion_error"
 
@@ -136,17 +143,12 @@ def _eval_day_type_for_date(
     assignments_list: list | None,
     frame_conditions_list: list | None,
 ) -> tuple[str, list[str], int, int]:
-    """Evaluate a single day_type on operating_date within its publication.
-
-    Returns:
-        (calendar_state, reason_codes, active_assignment_count, inactive_assignment_count)
-    """
+    """Evaluate a single day_type on operating_date within its publication."""
     reasons: list[str] = []
     op_d = _extract_iso_date(operating_date_str)
     if op_d is None:
         return "unresolved", ["invalid_operating_date"], 0, 0
 
-    # 1. Check CompositeFrame-level AvailabilityConditions when present
     if frame_conditions_list:
         any_frame_known = False
         any_frame_active = False
@@ -175,7 +177,6 @@ def _eval_day_type_for_date(
             reasons.append("outside_composite_frame_validity")
             return "inactive", reasons, 0, 0
 
-    # 2. Evaluate DayType PropertyOfDay constraints
     weekday_name = WEEKDAY_NAMES[op_d.weekday()]
     props_match = True
     if props_list:
@@ -199,20 +200,20 @@ def _eval_day_type_for_date(
                 tokens = {t.strip() for t in str(dow_raw).split() if t.strip()}
                 unknown_tokens = tokens - set(WEEKDAY_NAMES)
                 if unknown_tokens:
-                    reasons.append(f"unknown_days_of_week_token:{','.join(sorted(unknown_tokens))}")
+                    reasons.append(
+                        f"unknown_days_of_week_token:{','.join(sorted(unknown_tokens))}"
+                    )
                     return "unresolved", reasons, 0, 0
                 if weekday_name in tokens:
                     any_prop_matched = True
         props_match = any_prop_matched
 
-    # 3. Evaluate DayTypeAssignments matching this operating_date
     if not assignments_list:
         reasons.append("missing_day_type_assignments")
         return "unresolved", reasons, 0, 0
 
     date_specific_states: list[bool] = []
     period_states: list[bool] = []
-    unmatched_count = 0
 
     for asg in assignments_list:
         if asg is None:
@@ -232,8 +233,6 @@ def _eval_day_type_for_date(
                 return "unresolved", reasons, 0, 0
             if target_d == op_d:
                 date_specific_states.append(is_avail)
-            else:
-                unmatched_count += 1
         elif kind == "operating_day":
             target_d = _extract_iso_date(asg["target_date"] if "target_date" in asg else None)
             if target_d is None:
@@ -241,8 +240,6 @@ def _eval_day_type_for_date(
                 return "unresolved", reasons, 0, 0
             if target_d == op_d:
                 date_specific_states.append(is_avail)
-            else:
-                unmatched_count += 1
         elif kind == "operating_period":
             p_from = _extract_iso_date(asg["from_date"] if "from_date" in asg else None)
             p_to = _extract_iso_date(asg["to_date"] if "to_date" in asg else None)
@@ -252,8 +249,6 @@ def _eval_day_type_for_date(
             in_period = (p_from is None or op_d >= p_from) and (p_to is None or op_d <= p_to)
             if in_period:
                 period_states.append(is_avail)
-            else:
-                unmatched_count += 1
         else:
             reasons.append("unsupported_assignment_target")
             return "unresolved", reasons, 0, 0
@@ -261,7 +256,6 @@ def _eval_day_type_for_date(
     active_cnt = sum(1 for s in (date_specific_states + period_states) if s)
     inactive_cnt = sum(1 for s in (date_specific_states + period_states) if not s)
 
-    # Explicit single-date / OperatingDay overrides take precedence over broad OperatingPeriods
     if date_specific_states:
         if True in date_specific_states and False in date_specific_states:
             reasons.append("conflicting_date_specific_assignments")
@@ -269,7 +263,6 @@ def _eval_day_type_for_date(
         if False in date_specific_states:
             reasons.append("explicit_date_unavailable_override")
             return "inactive", reasons, active_cnt, inactive_cnt
-        # Explicit available date override
         if props_list and not props_match:
             reasons.append("explicit_date_available_override_weekday_mismatch")
         else:
@@ -319,7 +312,6 @@ def _eval_journey_availability(
     if op_d is None:
         return "unresolved", ["invalid_operating_date"]
 
-    # Check journey-level validityConditions if supplied
     if journey_conditions:
         any_valid = False
         for cond in journey_conditions:
@@ -375,7 +367,7 @@ def build_service_calendar(
     publication_lookup: DataFrame,
     provider: str = DEFAULT_PROVIDER,
 ) -> DataFrame:
-    """Evaluate every day_type against its publication's target operating_date."""
+    """Evaluate every day_type version against its publication's target operating_date."""
     target_dates_df = publication_lookup.select(
         "staging_run",
         "snapshot_date",
@@ -384,12 +376,17 @@ def build_service_calendar(
     ).dropDuplicates()
 
     raw_dts = _load_staged_table(spark, run_dirs, "day_types", publication_lookup, provider)
-    raw_dta = _load_staged_table(spark, run_dirs, "day_type_assignments", publication_lookup, provider)
-    raw_op = _load_staged_table(spark, run_dirs, "operating_periods", publication_lookup, provider)
+    raw_dta = _load_staged_table(
+        spark, run_dirs, "day_type_assignments", publication_lookup, provider
+    )
+    raw_op = _load_staged_table(
+        spark, run_dirs, "operating_periods", publication_lookup, provider
+    )
     raw_od = _load_staged_table(spark, run_dirs, "operating_days", publication_lookup, provider)
-    raw_cf = _load_staged_table(spark, run_dirs, "composite_frames", publication_lookup, provider)
+    raw_cf = _load_staged_table(
+        spark, run_dirs, "composite_frames", publication_lookup, provider
+    )
 
-    # Resolve OperatingDays per publication
     od_lookup = (
         raw_od.withColumn("od_id", F.col("record._id"))
         .withColumn("od_ver", F.col("record._version"))
@@ -399,7 +396,6 @@ def build_service_calendar(
         .dropDuplicates()
     )
 
-    # Resolve OperatingPeriods (including FromOperatingDayRef / ToOperatingDayRef fallbacks)
     op_base = (
         raw_op.withColumn("op_id", F.col("record._id"))
         .withColumn("op_ver", F.col("record._version"))
@@ -462,7 +458,6 @@ def build_service_calendar(
         .dropDuplicates()
     )
 
-    # Normalize DayTypeAssignments per publication + DayTypeRef
     dta_base = (
         raw_dta.withColumn("day_type_ref", F.col("record.DayTypeRef._ref"))
         .withColumn("day_type_ref_ver", F.col("record.DayTypeRef._version"))
@@ -505,6 +500,7 @@ def build_service_calendar(
         .select(
             dta_base["publication_id"].alias("publication_id"),
             dta_base["day_type_ref"].alias("day_type_ref"),
+            dta_base["day_type_ref_ver"].alias("day_type_ref_ver"),
             F.when(dta_base["asg_date"].isNotNull(), F.lit("date"))
             .when(dta_base["op_day_ref"].isNotNull(), F.lit("operating_day"))
             .when(dta_base["op_period_ref"].isNotNull(), F.lit("operating_period"))
@@ -515,7 +511,7 @@ def build_service_calendar(
             op_resolved["to_date"].alias("to_date"),
             dta_base["is_available_raw"].alias("is_available_raw"),
         )
-        .groupBy("publication_id", "day_type_ref")
+        .groupBy("publication_id", "day_type_ref", "day_type_ref_ver")
         .agg(
             F.collect_list(
                 F.struct(
@@ -529,7 +525,6 @@ def build_service_calendar(
         )
     )
 
-    # Frame-level AvailabilityConditions keyed by (publication_id, source_member, composite_frame_index)
     cf_conds = raw_cf.select(
         "publication_id",
         "source_member",
@@ -554,7 +549,7 @@ def build_service_calendar(
         .withColumn("day_type_id", F.col("record._id"))
         .withColumn("day_type_version", F.col("record._version"))
         .withColumn("props_list", F.col("record.properties.PropertyOfDay"))
-        .withColumn(_occurrence_struct_col())
+        .withColumn("source_occurrence", _occurrence_struct_col())
     )
 
     dt_with_context = (
@@ -568,6 +563,12 @@ def build_service_calendar(
             on=(
                 (dt_clean["publication_id"] == dta_enriched["publication_id"])
                 & (dt_clean["day_type_id"] == dta_enriched["day_type_ref"])
+                & (
+                    dta_enriched["day_type_ref_ver"].isNull()
+                    | (F.trim(dta_enriched["day_type_ref_ver"]) == "")
+                    | dt_clean["day_type_version"].isNull()
+                    | (dta_enriched["day_type_ref_ver"] == dt_clean["day_type_version"])
+                )
             ),
             how="left",
         )
@@ -576,7 +577,7 @@ def build_service_calendar(
             on=["publication_id", "source_member", "composite_frame_index"],
             how="left",
         )
-        .select(
+        .groupBy(
             dt_clean["publication_id"],
             dt_clean["provider"],
             dt_clean["snapshot_date"],
@@ -585,10 +586,10 @@ def build_service_calendar(
             dt_clean["day_type_id"],
             dt_clean["day_type_version"],
             dt_clean["props_list"],
-            dta_enriched["assignments_list"],
             cf_conds["frame_conditions"],
             dt_clean["source_occurrence"],
         )
+        .agg(F.flatten(F.collect_list(dta_enriched["assignments_list"])).alias("assignments_list"))
     )
 
     evaluated = dt_with_context.withColumn(
@@ -624,18 +625,24 @@ def build_journey_service_dates(
     """Evaluate every journey definition for its publication's target operating_date."""
     target_dates = publication_lookup.select("publication_id", "operating_date").dropDuplicates()
 
-    # Summarize calendar_state per (publication_id, operating_date, day_type_id)
-    cal_by_dt = (
-        service_calendar_df.groupBy("publication_id", "operating_date", "day_type_id")
-        .agg(
-            F.collect_set("calendar_state").alias("_states"),
+    cal_by_dt_ver = (
+        service_calendar_df.groupBy(
+            "publication_id", "operating_date", "day_type_id", "day_type_version"
         )
+        .agg(F.collect_set("calendar_state").alias("_states"))
         .withColumn(
             "resolved_calendar_state",
-            F.when(F.size("_states") > 1, F.lit("unresolved"))
-            .otherwise(F.element_at("_states", 1)),
+            F.when(F.size("_states") > 1, F.lit("unresolved")).otherwise(
+                F.element_at("_states", 1)
+            ),
         )
-        .select("publication_id", "operating_date", "day_type_id", "resolved_calendar_state")
+        .select(
+            "publication_id",
+            "operating_date",
+            "day_type_id",
+            "day_type_version",
+            "resolved_calendar_state",
+        )
     )
 
     j_base = (
@@ -649,20 +656,32 @@ def build_journey_service_dates(
         "publication_id",
         "operating_date_dt",
         F.explode_outer("day_type_refs").alias("_dt_ref"),
-    ).withColumn("_ref_dt_id", F.col("_dt_ref.day_type_id"))
+    ).select(
+        "_j_row_id",
+        "publication_id",
+        "operating_date_dt",
+        F.col("_dt_ref.day_type_id").alias("_ref_dt_id"),
+        F.col("_dt_ref.day_type_version").alias("_ref_dt_ver"),
+    )
 
     j_joined_cal = j_exploded.join(
-        cal_by_dt,
+        cal_by_dt_ver,
         on=(
-            (j_exploded["publication_id"] == cal_by_dt["publication_id"])
-            & (j_exploded["operating_date_dt"] == cal_by_dt["operating_date"])
-            & (j_exploded["_ref_dt_id"] == cal_by_dt["day_type_id"])
+            (j_exploded["publication_id"] == cal_by_dt_ver["publication_id"])
+            & (j_exploded["operating_date_dt"] == cal_by_dt_ver["operating_date"])
+            & _match_ref_expr(
+                j_exploded["_ref_dt_id"],
+                j_exploded["_ref_dt_ver"],
+                cal_by_dt_ver["day_type_id"],
+                cal_by_dt_ver["day_type_version"],
+            )
         ),
         how="left",
     ).withColumn(
         "_effective_dt_state",
-        F.when(F.col("_ref_dt_id").isNull(), F.lit(None).cast("string"))
-        .otherwise(F.coalesce(F.col("resolved_calendar_state"), F.lit("unresolved"))),
+        F.when(F.col("_ref_dt_id").isNull(), F.lit(None).cast("string")).otherwise(
+            F.coalesce(F.col("resolved_calendar_state"), F.lit("unresolved"))
+        ),
     )
 
     dt_states_agg = j_joined_cal.groupBy("_j_row_id").agg(
@@ -779,35 +798,41 @@ def build_netex_stop_calls(
         )
     )
 
-    # Join scheduled dated journeys to their passing times within publication
-    dated_pt = scheduled_journeys.join(
-        pt_base,
-        on=(
-            (scheduled_journeys["publication_id"] == pt_base["publication_id"])
-            & (scheduled_journeys["service_journey_id"] == pt_base["service_journey_id"])
-            & (
-                scheduled_journeys["service_journey_version"].isNull()
-                | pt_base["service_journey_version"].isNull()
-                | (scheduled_journeys["service_journey_version"] == pt_base["service_journey_version"])
-            )
-        ),
-        how="inner",
-    ).select(
-        scheduled_journeys["*"],
-        pt_base["passing_time_index"],
-        pt_base["passing_time_id"],
-        pt_base["passing_time_version"],
-        pt_base["passing_time_order_raw"],
-        pt_base["stop_point_in_pattern_ref"],
-        pt_base["stop_point_in_pattern_ref_ver"],
-        pt_base["planned_arrival_time_raw"],
-        pt_base["planned_departure_time_raw"],
-        pt_base["planned_arrival_day_offset_raw"],
-        pt_base["planned_departure_day_offset_raw"],
-        pt_base["earliest_departure_time_raw"],
-        pt_base["latest_arrival_time_raw"],
-        pt_base["is_flexible_window"],
-    ).withColumn("_call_occ_id", F.monotonically_increasing_id())
+    dated_pt = (
+        scheduled_journeys.join(
+            pt_base,
+            on=(
+                (scheduled_journeys["publication_id"] == pt_base["publication_id"])
+                & (scheduled_journeys["service_journey_id"] == pt_base["service_journey_id"])
+                & (
+                    scheduled_journeys["service_journey_version"].isNull()
+                    | pt_base["service_journey_version"].isNull()
+                    | (
+                        scheduled_journeys["service_journey_version"]
+                        == pt_base["service_journey_version"]
+                    )
+                )
+            ),
+            how="inner",
+        )
+        .select(
+            scheduled_journeys["*"],
+            pt_base["passing_time_index"],
+            pt_base["passing_time_id"],
+            pt_base["passing_time_version"],
+            pt_base["passing_time_order_raw"],
+            pt_base["stop_point_in_pattern_ref"],
+            pt_base["stop_point_in_pattern_ref_ver"],
+            pt_base["planned_arrival_time_raw"],
+            pt_base["planned_departure_time_raw"],
+            pt_base["planned_arrival_day_offset_raw"],
+            pt_base["planned_departure_day_offset_raw"],
+            pt_base["earliest_departure_time_raw"],
+            pt_base["latest_arrival_time_raw"],
+            pt_base["is_flexible_window"],
+        )
+        .withColumn("_call_occ_id", F.monotonically_increasing_id())
+    )
 
     jps_lookup = journey_pattern_stops_df.select(
         F.col("publication_id").alias("_jps_pub_id"),
@@ -855,7 +880,14 @@ def build_netex_stop_calls(
         )
         .withColumn("_rn", F.row_number().over(spip_pick_win))
         .filter(F.col("_rn") == 1)
-        .drop("_rn", "_call_occ_id", "_jps_pub_id", "_jps_jp_id", "_jps_spip_id", "_jps_spip_ver")
+        .drop(
+            "_rn",
+            "_call_occ_id",
+            "_jps_pub_id",
+            "_jps_jp_id",
+            "_jps_spip_id",
+            "_jps_spip_ver",
+        )
     )
 
     op_date_str = F.date_format(F.col("operating_date"), "yyyy-MM-dd")
@@ -884,22 +916,47 @@ def build_netex_stop_calls(
         .withColumn("planned_arrival_local_oslo", F.col("_arr_conv.local_iso"))
         .withColumn("planned_arrival_day_offset", F.col("_arr_conv.resolved_day_offset"))
         .withColumn("planned_arrival_time_error", F.col("_arr_conv.error_code"))
+        .withColumn(
+            "arrival_time_valid",
+            F.col("planned_arrival_utc").isNotNull() & F.col("planned_arrival_time_error").isNull(),
+        )
         .withColumn("planned_departure_utc", F.to_timestamp(F.col("_dep_conv.utc_iso")))
         .withColumn("planned_departure_local_oslo", F.col("_dep_conv.local_iso"))
         .withColumn("planned_departure_day_offset", F.col("_dep_conv.resolved_day_offset"))
         .withColumn("planned_departure_time_error", F.col("_dep_conv.error_code"))
+        .withColumn(
+            "departure_time_valid",
+            F.col("planned_departure_utc").isNotNull()
+            & F.col("planned_departure_time_error").isNull(),
+        )
+        .withColumn(
+            "has_any_planned_time_error",
+            F.col("planned_arrival_time_error").isNotNull()
+            | F.col("planned_departure_time_error").isNotNull(),
+        )
         .withColumn("source_timezone", tz_col)
         .withColumn(
             "planned_call_status",
             F.when(F.col("is_flexible_window"), F.lit("flexible_service_window"))
-            .when(F.col("journey_resolution_status") != "resolved", F.lit("unresolved_journey_definition"))
+            .when(
+                F.col("journey_resolution_status") != "resolved",
+                F.lit("unresolved_journey_definition"),
+            )
             .when(F.col("pattern_stop_match_count") == 0, F.lit("unresolved_pattern_stop"))
             .when(F.col("pattern_stop_match_count") > 1, F.lit("ambiguous_pattern_stop"))
             .when(F.col("stop_assignment_status") != "resolved", F.lit("unresolved_quay"))
             .when(
                 F.col("planned_arrival_time_error").isNotNull()
-                | F.col("planned_departure_time_error").isNotNull(),
-                F.lit("invalid_planned_timestamp"),
+                & F.col("planned_departure_time_error").isNotNull(),
+                F.lit("invalid_planned_timestamps"),
+            )
+            .when(
+                F.col("planned_arrival_time_error").isNotNull(),
+                F.lit("resolved_with_arrival_time_error"),
+            )
+            .when(
+                F.col("planned_departure_time_error").isNotNull(),
+                F.lit("resolved_with_departure_time_error"),
             )
             .otherwise(F.lit("resolved")),
         )
@@ -939,12 +996,15 @@ def build_netex_stop_calls(
         "planned_arrival_local_oslo",
         "planned_arrival_utc",
         "planned_arrival_time_error",
+        "arrival_time_valid",
         "planned_departure_time_raw",
         "planned_departure_day_offset_raw",
         "planned_departure_day_offset",
         "planned_departure_local_oslo",
         "planned_departure_utc",
         "planned_departure_time_error",
+        "departure_time_valid",
+        "has_any_planned_time_error",
         "earliest_departure_time_raw",
         "latest_arrival_time_raw",
         "is_flexible_window",
