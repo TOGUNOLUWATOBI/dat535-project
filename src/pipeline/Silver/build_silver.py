@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 
-from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import types as T
 
 from . import (
@@ -24,9 +24,18 @@ from .calendar_and_calls import (
     build_netex_stop_calls,
     build_service_calendar,
 )
-from .input_selection import parse_iso_date_str, select_inputs, write_selection_report
-from .netex_definitions import build_netex_definitions
-from .quality_and_publish import write_and_publish_silver
+from .input_selection import parse_iso_date_str, select_inputs
+from .netex_definitions import (
+    build_journey_patterns_and_stops,
+    build_journeys,
+    build_lines,
+    build_routes,
+)
+from .quality_and_publish import (
+    _prepare_tmp_dir,
+    _write_and_read_table,
+    write_and_publish_silver,
+)
 from .reconciliation import build_reconciled_stop_calls
 from .siri_et_calls import build_siri_et_stop_calls
 
@@ -127,10 +136,26 @@ def main(argv: list[str] | None = None) -> int:
     if selection.hard_failures:
         raise RuntimeError(f"Input selection hard failures: {selection.hard_failures}")
 
-    spark = _create_spark_session(shuffle_partitions=args.shuffle_partitions)
-    spark_master = os.environ.get("SPARK_MASTER_URL") or spark.sparkContext.master
+    tmp_dir = _prepare_tmp_dir(output_dir)
+    spark = None
+    publication_lookup_df = None
 
     try:
+        spark = _create_spark_session(shuffle_partitions=args.shuffle_partitions)
+        spark_master = spark.sparkContext.master
+        all_tables: dict[str, DataFrame] = {}
+        table_counts: dict[str, int] = {}
+        table_schemas: dict[str, list[dict[str, object]]] = {}
+
+        def materialize(name: str, df: DataFrame) -> DataFrame:
+            written_df, row_count, schema_meta = _write_and_read_table(
+                spark, tmp_dir, name, df
+            )
+            all_tables[name] = written_df
+            table_counts[name] = row_count
+            table_schemas[name] = schema_meta
+            return written_df
+
         pub_rows = [
             (
                 r.staging_run,
@@ -166,70 +191,85 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         # 1. Resolved publication-scoped NeTEx definitions
-        defs = build_netex_definitions(
-            spark=spark,
-            run_dirs=selected_run_dirs,
-            publication_lookup=publication_lookup_df,
-            provider=args.provider,
+        # Each builder receives the written upstream tables, cutting their lineage.
+        lines_df = materialize(
+            "lines",
+            build_lines(spark, selected_run_dirs, publication_lookup_df, args.provider),
         )
-        lines_df = defs["lines"].cache()
-        routes_df = defs["routes"].cache()
-        jp_df = defs["journey_patterns"].cache()
-        jps_df = defs["journey_pattern_stops"].cache()
-        journeys_df = defs["journeys"].cache()
+        routes_df = materialize(
+            "routes",
+            build_routes(
+                spark, selected_run_dirs, publication_lookup_df, lines_df, args.provider
+            ),
+        )
+        jp_source_df, jps_source_df = build_journey_patterns_and_stops(
+            spark, selected_run_dirs, publication_lookup_df, routes_df, args.provider
+        )
+        jp_df = materialize("journey_patterns", jp_source_df)
+        jps_df = materialize("journey_pattern_stops", jps_source_df)
+        del jp_source_df, jps_source_df
+        journeys_df = materialize(
+            "journeys",
+            build_journeys(
+                spark, selected_run_dirs, publication_lookup_df, jp_df, lines_df,
+                args.provider,
+            ),
+        )
 
         # 2. Calendar & dated planned stop calls
-        service_calendar_df = build_service_calendar(
-            spark=spark,
-            run_dirs=selected_run_dirs,
-            publication_lookup=publication_lookup_df,
-            provider=args.provider,
-        ).cache()
+        service_calendar_df = materialize(
+            "service_calendar",
+            build_service_calendar(
+                spark=spark,
+                run_dirs=selected_run_dirs,
+                publication_lookup=publication_lookup_df,
+                provider=args.provider,
+            ),
+        )
 
-        journey_service_dates_df = build_journey_service_dates(
-            journeys_df=journeys_df,
-            service_calendar_df=service_calendar_df,
-            publication_lookup=publication_lookup_df,
-        ).cache()
+        journey_service_dates_df = materialize(
+            "journey_service_dates",
+            build_journey_service_dates(
+                journeys_df=journeys_df,
+                service_calendar_df=service_calendar_df,
+                publication_lookup=publication_lookup_df,
+            ),
+        )
 
-        netex_stop_calls_df = build_netex_stop_calls(
-            spark=spark,
-            run_dirs=selected_run_dirs,
-            publication_lookup=publication_lookup_df,
-            journey_service_dates_df=journey_service_dates_df,
-            journey_pattern_stops_df=jps_df,
-            provider=args.provider,
-            timezone_name=args.timezone,
-        ).cache()
+        netex_stop_calls_df = materialize(
+            "netex_stop_calls",
+            build_netex_stop_calls(
+                spark=spark,
+                run_dirs=selected_run_dirs,
+                publication_lookup=publication_lookup_df,
+                journey_service_dates_df=journey_service_dates_df,
+                journey_pattern_stops_df=jps_df,
+                provider=args.provider,
+                timezone_name=args.timezone,
+            ),
+        )
 
         # 3. Canonical SIRI ET stop calls
-        siri_et_stop_calls_df = build_siri_et_stop_calls(
-            spark=spark,
-            siri_lookup=publication_lookup_df,
-            provider=args.provider,
-            timezone_name=args.timezone,
-        ).cache()
+        siri_et_stop_calls_df = materialize(
+            "siri_et_stop_calls",
+            build_siri_et_stop_calls(
+                spark=spark,
+                siri_lookup=publication_lookup_df,
+                provider=args.provider,
+                timezone_name=args.timezone,
+            ),
+        )
 
         # 4. Reconciled stop calls + metric eligibility
-        reconciled_stop_calls_df = build_reconciled_stop_calls(
-            netex_stop_calls_df=netex_stop_calls_df,
-            siri_et_stop_calls_df=siri_et_stop_calls_df,
-            journey_service_dates_df=journey_service_dates_df,
-            publication_lookup_df=publication_lookup_df,
-        ).cache()
-
-        all_tables = {
-            "lines": lines_df,
-            "routes": routes_df,
-            "journey_patterns": jp_df,
-            "journey_pattern_stops": jps_df,
-            "journeys": journeys_df,
-            "service_calendar": service_calendar_df,
-            "journey_service_dates": journey_service_dates_df,
-            "netex_stop_calls": netex_stop_calls_df,
-            "siri_et_stop_calls": siri_et_stop_calls_df,
-            "reconciled_stop_calls": reconciled_stop_calls_df,
-        }
+        materialize(
+            "reconciled_stop_calls",
+            build_reconciled_stop_calls(
+                netex_stop_calls_df=netex_stop_calls_df,
+                siri_et_stop_calls_df=siri_et_stop_calls_df,
+                journey_service_dates_df=journey_service_dates_df,
+                publication_lookup_df=publication_lookup_df,
+            ),
+        )
 
         manifest = write_and_publish_silver(
             spark=spark,
@@ -247,19 +287,25 @@ def main(argv: list[str] | None = None) -> int:
                 "shuffle_partitions": args.shuffle_partitions,
                 "default_silver_runs_dir": str(DEFAULT_SILVER_RUNS_DIR),
             },
+            tmp_dir=tmp_dir,
+            table_counts=table_counts,
+            table_schemas=table_schemas,
         )
-
-        # Also save a standalone input selection audit artifact in quality/
-        write_selection_report(selection, output_dir / "quality" / "input_selection.json")
-
-        for df in all_tables.values():
-            df.unpersist()
-        publication_lookup_df.unpersist()
 
         print(json.dumps(manifest, indent=2, default=str))
         return 0
     finally:
-        spark.stop()
+        try:
+            # The small lookup is still needed when the daily quality summary runs.
+            if publication_lookup_df is not None:
+                publication_lookup_df.unpersist(blocking=True)
+        finally:
+            try:
+                if spark is not None:
+                    spark.stop()
+            finally:
+                if tmp_dir.exists():
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

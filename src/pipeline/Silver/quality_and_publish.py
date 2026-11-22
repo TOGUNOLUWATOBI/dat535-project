@@ -13,7 +13,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from . import SILVER_TABLES, SILVER_VERSION
-from .input_selection import InputSelectionResult
+from .input_selection import InputSelectionResult, write_selection_report
 
 DATED_SILVER_TABLES: frozenset[str] = frozenset(
     {
@@ -24,6 +24,44 @@ DATED_SILVER_TABLES: frozenset[str] = frozenset(
         "reconciled_stop_calls",
     }
 )
+
+
+def _prepare_tmp_dir(output_dir: Path) -> Path:
+    """Create a fresh sibling directory owned by this run before building tables."""
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(
+            f"Target Silver run directory already exists and is non-empty: {output_dir}"
+        )
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = output_dir.parent / f".{output_dir.name}.tmp.{os.getpid()}"
+    tmp_dir.mkdir()
+    return tmp_dir
+
+
+def _write_and_read_table(
+    spark: SparkSession,
+    tmp_dir: Path,
+    tbl_name: str,
+    df: DataFrame,
+    unpersist_source: bool = True,
+) -> tuple[DataFrame, int, list[dict[str, Any]]]:
+    """Write once, verify the Parquet read-back, and release the completed source."""
+    tbl_path = tmp_dir / tbl_name
+    writer = df.write.mode("errorifexists")
+    if tbl_name in DATED_SILVER_TABLES and "operating_date" in df.columns:
+        writer = writer.partitionBy("operating_date")
+    writer.parquet(str(tbl_path))
+
+    # Empty partitioned outputs have no data-file footer from which to infer a schema.
+    written_df = spark.read.schema(df.schema).parquet(str(tbl_path))
+    row_count = written_df.count()
+    schema_meta = [
+        {"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable}
+        for f in written_df.schema.fields
+    ]
+    if unpersist_source and df.is_cached:
+        df.unpersist(blocking=True)
+    return written_df, row_count, schema_meta
 
 
 def build_daily_quality_summary(
@@ -179,7 +217,7 @@ def validate_silver_integrity(
     table_counts: dict[str, int],
     selection: InputSelectionResult,
     daily_summary_rows: list[dict[str, Any]],
-    tables: dict[str, DataFrame] | None = None,
+    written_reconciled_df: DataFrame,
 ) -> tuple[list[str], list[str]]:
     """Enforce hard structural gates against both planned and reported input populations."""
     hard_failures: list[str] = list(selection.hard_failures)
@@ -215,37 +253,46 @@ def validate_silver_integrity(
             f"reconciled_stop_calls_count_mismatch:daily_sum={daily_rec} vs written={written_rec}"
         )
 
-    if tables is not None and "reconciled_stop_calls" in tables:
-        rec_df = tables["reconciled_stop_calls"]
-        orphan_rows = rec_df.filter(
-            F.col("planned_call_id").isNull() & F.col("et_canonical_id").isNull()
-        ).count()
-        if orphan_rows > 0:
-            hard_failures.append(f"reconciled_orphan_rows_without_ids:{orphan_rows}")
-
-        non_null_p = rec_df.filter(F.col("planned_call_id").isNotNull())
-        total_p_refs = non_null_p.count()
-        distinct_p_refs = non_null_p.select("planned_call_id").distinct().count()
-        if total_p_refs != distinct_p_refs:
-            hard_failures.append(
-                f"duplicate_planned_call_in_reconciled:rows={total_p_refs} vs distinct={distinct_p_refs}"
-            )
-        if distinct_p_refs != written_nc:
-            hard_failures.append(
-                f"planned_call_loss_or_mismatch:reconciled_distinct={distinct_p_refs} vs netex_stop_calls={written_nc}"
-            )
-
-        non_null_e = rec_df.filter(F.col("et_canonical_id").isNotNull())
-        total_e_refs = non_null_e.count()
-        distinct_e_refs = non_null_e.select("et_canonical_id").distinct().count()
-        if total_e_refs != distinct_e_refs:
-            hard_failures.append(
-                f"duplicate_et_call_in_reconciled:rows={total_e_refs} vs distinct={distinct_e_refs}"
-            )
-        if distinct_e_refs != written_et_canon:
-            hard_failures.append(
-                f"et_call_loss_or_mismatch:reconciled_distinct={distinct_e_refs} vs siri_et_stop_calls={written_et_canon}"
-            )
+    # Validate both populations in one action over the written ID columns.
+    rec_stats = written_reconciled_df.select("planned_call_id", "et_canonical_id").agg(
+        F.count(F.lit(1)).alias("rows"),
+        F.sum(
+            F.when(
+                F.col("planned_call_id").isNull() & F.col("et_canonical_id").isNull(), 1
+            ).otherwise(0)
+        ).alias("orphan_rows"),
+        F.count("planned_call_id").alias("total_p_refs"),
+        F.countDistinct("planned_call_id").alias("distinct_p_refs"),
+        F.count("et_canonical_id").alias("total_e_refs"),
+        F.countDistinct("et_canonical_id").alias("distinct_e_refs"),
+    ).first()
+    if rec_stats["rows"] != written_rec:
+        hard_failures.append(
+            f"reconciled_written_count_mismatch:verified={rec_stats['rows']} vs written={written_rec}"
+        )
+    orphan_rows = int(rec_stats["orphan_rows"] or 0)
+    total_p_refs = int(rec_stats["total_p_refs"])
+    distinct_p_refs = int(rec_stats["distinct_p_refs"])
+    total_e_refs = int(rec_stats["total_e_refs"])
+    distinct_e_refs = int(rec_stats["distinct_e_refs"])
+    if orphan_rows > 0:
+        hard_failures.append(f"reconciled_orphan_rows_without_ids:{orphan_rows}")
+    if total_p_refs != distinct_p_refs:
+        hard_failures.append(
+            f"duplicate_planned_call_in_reconciled:rows={total_p_refs} vs distinct={distinct_p_refs}"
+        )
+    if distinct_p_refs != written_nc:
+        hard_failures.append(
+            f"planned_call_loss_or_mismatch:reconciled_distinct={distinct_p_refs} vs netex_stop_calls={written_nc}"
+        )
+    if total_e_refs != distinct_e_refs:
+        hard_failures.append(
+            f"duplicate_et_call_in_reconciled:rows={total_e_refs} vs distinct={distinct_e_refs}"
+        )
+    if distinct_e_refs != written_et_canon:
+        hard_failures.append(
+            f"et_call_loss_or_mismatch:reconciled_distinct={distinct_e_refs} vs siri_et_stop_calls={written_et_canon}"
+        )
 
     total_ambiguous = sum(int(r.get("reconciled_ambiguous", 0) or 0) for r in daily_summary_rows)
     unres_cal = sum(int(r.get("journeys_calendar_unresolved", 0) or 0) for r in daily_summary_rows)
@@ -275,38 +322,26 @@ def write_and_publish_silver(
     started_at_utc: str,
     spark_master: str,
     config_meta: dict[str, Any],
+    *,
+    tmp_dir: Path,
+    table_counts: dict[str, int],
+    table_schemas: dict[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
-    """Write to a staging temp sibling dir, validate gates, and atomically move into output_dir."""
+    """Validate Parquet-backed tables and atomically publish their existing temp directory."""
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(
             f"Target Silver run directory already exists and is non-empty: {output_dir}"
         )
 
-    parent_dir = output_dir.parent
-    parent_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir = parent_dir / f".{output_dir.name}.tmp.{os.getpid()}"
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        table_counts: dict[str, int] = {}
-        table_schemas: dict[str, list[dict[str, Any]]] = {}
-
         for tbl_name in SILVER_TABLES:
-            df = tables[tbl_name]
-            tbl_path = tmp_dir / tbl_name
-            writer = df.write.mode("overwrite")
-            if tbl_name in DATED_SILVER_TABLES and "operating_date" in df.columns:
-                writer = writer.partitionBy("operating_date")
-            writer.parquet(str(tbl_path))
-
-            written_df = spark.read.parquet(str(tbl_path))
-            table_counts[tbl_name] = written_df.count()
-            table_schemas[tbl_name] = [
-                {"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable}
-                for f in written_df.schema.fields
-            ]
+            if (
+                tbl_name not in tables
+                or tbl_name not in table_counts
+                or tbl_name not in table_schemas
+                or not (tmp_dir / tbl_name).is_dir()
+            ):
+                raise ValueError(f"Silver table was not materialized: {tbl_name}")
 
         daily_summary_df = build_daily_quality_summary(tables, publication_lookup_df)
         quality_dir = tmp_dir / "quality"
@@ -325,8 +360,11 @@ def write_and_publish_silver(
             table_counts=table_counts,
             selection=selection,
             daily_summary_rows=daily_rows,
-            tables=tables,
+            written_reconciled_df=tables["reconciled_stop_calls"],
         )
+
+        # Also save a standalone input selection audit artifact in quality/
+        write_selection_report(selection, quality_dir / "input_selection.json")
 
         completed_at_utc = datetime.utcnow().isoformat() + "Z"
         gate_passed = len(hard_failures) == 0
