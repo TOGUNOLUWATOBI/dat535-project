@@ -29,7 +29,7 @@ PKG_ZIP="/tmp/silver_pkg_${RUN_ID}.zip"
 
 cd "$REPO_ROOT"
 rm -rf "$OUT_DIR" "$SILVER_RUNS_DIR/.${RUN_ID}."* "$PKG_ZIP"
-(cd "$REPO_ROOT/src" && zip -rq "$PKG_ZIP" pipeline/Silver)
+python3 -m zipfile -c "$PKG_ZIP" "$REPO_ROOT/src/pipeline/Silver"
 
 CMD=(
   spark-submit

@@ -178,6 +178,12 @@ def _eval_day_type_for_date(
             return "inactive", reasons, 0, 0
 
     weekday_name = WEEKDAY_NAMES[op_d.weekday()]
+    expanded_weekdays = set(WEEKDAY_NAMES)
+    if weekday_name in ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday"):
+        active_tokens = {weekday_name, "Weekdays", "Everyday"}
+    else:
+        active_tokens = {weekday_name, "Everyday"}
+
     props_match = True
     if props_list:
         any_prop_matched = False
@@ -198,13 +204,13 @@ def _eval_day_type_for_date(
                 any_prop_matched = True
             else:
                 tokens = {t.strip() for t in str(dow_raw).split() if t.strip()}
-                unknown_tokens = tokens - set(WEEKDAY_NAMES)
+                unknown_tokens = tokens - (expanded_weekdays | {"Weekdays", "Everyday"})
                 if unknown_tokens:
                     reasons.append(
                         f"unknown_days_of_week_token:{','.join(sorted(unknown_tokens))}"
                     )
                     return "unresolved", reasons, 0, 0
-                if weekday_name in tokens:
+                if tokens & active_tokens:
                     any_prop_matched = True
         props_match = any_prop_matched
 
@@ -249,6 +255,9 @@ def _eval_day_type_for_date(
             in_period = (p_from is None or op_d >= p_from) and (p_to is None or op_d <= p_to)
             if in_period:
                 period_states.append(is_avail)
+            else:
+                unmatched_period = True
+                _ = unmatched_period
         else:
             reasons.append("unsupported_assignment_target")
             return "unresolved", reasons, 0, 0
@@ -470,46 +479,52 @@ def build_service_calendar(
         .filter(F.col("day_type_ref").isNotNull())
     )
 
+    dta_b = dta_base.alias("dta_b")
+    op_r = op_resolved.alias("op_r")
+    od_l = od_lookup.alias("od_l")
+
     dta_enriched = (
-        dta_base.join(
-            op_resolved,
+        dta_b.join(
+            op_r,
             on=(
-                (dta_base["publication_id"] == op_resolved["publication_id"])
+                (F.col("dta_b.publication_id") == F.col("op_r.publication_id"))
                 & _match_ref_expr(
-                    dta_base["op_period_ref"],
-                    dta_base["op_period_ref_ver"],
-                    op_resolved["op_id"],
-                    op_resolved["op_ver"],
+                    F.col("dta_b.op_period_ref"),
+                    F.col("dta_b.op_period_ref_ver"),
+                    F.col("op_r.op_id"),
+                    F.col("op_r.op_ver"),
                 )
             ),
             how="left",
         )
         .join(
-            od_lookup,
+            od_l,
             on=(
-                (dta_base["publication_id"] == od_lookup["publication_id"])
+                (F.col("dta_b.publication_id") == F.col("od_l.publication_id"))
                 & _match_ref_expr(
-                    dta_base["op_day_ref"],
-                    dta_base["op_day_ref_ver"],
-                    od_lookup["od_id"],
-                    od_lookup["od_ver"],
+                    F.col("dta_b.op_day_ref"),
+                    F.col("dta_b.op_day_ref_ver"),
+                    F.col("od_l.od_id"),
+                    F.col("od_l.od_ver"),
                 )
             ),
             how="left",
         )
         .select(
-            dta_base["publication_id"].alias("publication_id"),
-            dta_base["day_type_ref"].alias("day_type_ref"),
-            dta_base["day_type_ref_ver"].alias("day_type_ref_ver"),
-            F.when(dta_base["asg_date"].isNotNull(), F.lit("date"))
-            .when(dta_base["op_day_ref"].isNotNull(), F.lit("operating_day"))
-            .when(dta_base["op_period_ref"].isNotNull(), F.lit("operating_period"))
+            F.col("dta_b.publication_id").alias("publication_id"),
+            F.col("dta_b.day_type_ref").alias("day_type_ref"),
+            F.col("dta_b.day_type_ref_ver").alias("day_type_ref_ver"),
+            F.when(F.col("dta_b.asg_date").isNotNull(), F.lit("date"))
+            .when(F.col("dta_b.op_day_ref").isNotNull(), F.lit("operating_day"))
+            .when(F.col("dta_b.op_period_ref").isNotNull(), F.lit("operating_period"))
             .otherwise(F.lit("unknown"))
             .alias("assignment_kind"),
-            F.coalesce(dta_base["asg_date"], od_lookup["od_calendar_date"]).alias("target_date"),
-            op_resolved["from_date"].alias("from_date"),
-            op_resolved["to_date"].alias("to_date"),
-            dta_base["is_available_raw"].alias("is_available_raw"),
+            F.coalesce(F.col("dta_b.asg_date"), F.col("od_l.od_calendar_date")).alias(
+                "target_date"
+            ),
+            F.col("op_r.from_date").alias("from_date"),
+            F.col("op_r.to_date").alias("to_date"),
+            F.col("dta_b.is_available_raw").alias("is_available_raw"),
         )
         .groupBy("publication_id", "day_type_ref", "day_type_ref_ver")
         .agg(
@@ -552,44 +567,54 @@ def build_service_calendar(
         .withColumn("source_occurrence", _occurrence_struct_col())
     )
 
+    dt_with_dates = dt_clean.join(
+        target_dates_df.select("publication_id", "operating_date"),
+        on="publication_id",
+        how="inner",
+    ).alias("dt_c")
+
+    dta_e = dta_enriched.alias("dta_e")
+    cf_c = cf_conds.alias("cf_c")
+
     dt_with_context = (
-        dt_clean.join(
-            target_dates_df.select("publication_id", "operating_date"),
-            on="publication_id",
-            how="inner",
-        )
-        .join(
-            dta_enriched,
+        dt_with_dates.join(
+            dta_e,
             on=(
-                (dt_clean["publication_id"] == dta_enriched["publication_id"])
-                & (dt_clean["day_type_id"] == dta_enriched["day_type_ref"])
+                (F.col("dt_c.publication_id") == F.col("dta_e.publication_id"))
+                & (F.col("dt_c.day_type_id") == F.col("dta_e.day_type_ref"))
                 & (
-                    dta_enriched["day_type_ref_ver"].isNull()
-                    | (F.trim(dta_enriched["day_type_ref_ver"]) == "")
-                    | dt_clean["day_type_version"].isNull()
-                    | (dta_enriched["day_type_ref_ver"] == dt_clean["day_type_version"])
+                    F.col("dta_e.day_type_ref_ver").isNull()
+                    | (F.trim(F.col("dta_e.day_type_ref_ver")) == "")
+                    | F.col("dt_c.day_type_version").isNull()
+                    | (F.col("dta_e.day_type_ref_ver") == F.col("dt_c.day_type_version"))
                 )
             ),
             how="left",
         )
         .join(
-            cf_conds,
-            on=["publication_id", "source_member", "composite_frame_index"],
+            cf_c,
+            on=(
+                (F.col("dt_c.publication_id") == F.col("cf_c.publication_id"))
+                & (F.col("dt_c.source_member") == F.col("cf_c.source_member"))
+                & (F.col("dt_c.composite_frame_index") == F.col("cf_c.composite_frame_index"))
+            ),
             how="left",
         )
         .groupBy(
-            dt_clean["publication_id"],
-            dt_clean["provider"],
-            dt_clean["snapshot_date"],
-            F.col("operating_date").cast("date").alias("operating_date"),
-            F.col("operating_date").alias("_op_date_str"),
-            dt_clean["day_type_id"],
-            dt_clean["day_type_version"],
-            dt_clean["props_list"],
-            cf_conds["frame_conditions"],
-            dt_clean["source_occurrence"],
+            F.col("dt_c.publication_id").alias("publication_id"),
+            F.col("dt_c.provider").alias("provider"),
+            F.col("dt_c.snapshot_date").alias("snapshot_date"),
+            F.col("dt_c.operating_date").cast("date").alias("operating_date"),
+            F.col("dt_c.operating_date").alias("_op_date_str"),
+            F.col("dt_c.day_type_id").alias("day_type_id"),
+            F.col("dt_c.day_type_version").alias("day_type_version"),
+            F.col("dt_c.props_list").alias("props_list"),
+            F.col("cf_c.frame_conditions").alias("frame_conditions"),
+            F.col("dt_c.source_occurrence").alias("source_occurrence"),
         )
-        .agg(F.flatten(F.collect_list(dta_enriched["assignments_list"])).alias("assignments_list"))
+        .agg(
+            F.flatten(F.collect_list(F.col("dta_e.assignments_list"))).alias("assignments_list")
+        )
     )
 
     evaluated = dt_with_context.withColumn(
