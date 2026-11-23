@@ -672,7 +672,19 @@ def build_journey_service_dates(
 
     j_base = (
         journeys_df.join(target_dates, on="publication_id", how="inner")
-        .withColumn("_j_row_id", F.monotonically_increasing_id())
+        .withColumn(
+            "_j_row_id",
+            F.sha2(
+                F.to_json(
+                    F.struct(
+                        F.col("publication_id").alias("publication_id"),
+                        F.col("operating_date").alias("operating_date"),
+                        F.col("source_occurrence").alias("source_occurrence"),
+                    )
+                ),
+                256,
+            ),
+        )
         .withColumn("operating_date_dt", F.col("operating_date").cast("date"))
     )
 

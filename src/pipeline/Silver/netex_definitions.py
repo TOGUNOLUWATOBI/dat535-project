@@ -162,8 +162,19 @@ def build_routes(
         .withColumn("line_ref_version", F.col("record.LineRef._version"))
         .withColumn("flexible_line_ref", F.col("record.FlexibleLineRef._ref"))
         .withColumn("flexible_line_ref_version", F.col("record.FlexibleLineRef._version"))
-        .withColumn("_occ_id", F.monotonically_increasing_id())
         .withColumn("source_occurrence", _occurrence_struct_col())
+        .withColumn(
+            "_occ_id",
+            F.sha2(
+                F.to_json(
+                    F.struct(
+                        F.col("publication_id").alias("publication_id"),
+                        F.col("source_occurrence").alias("source_occurrence"),
+                    )
+                ),
+                256,
+            ),
+        )
     )
 
     line_targets = lines_df.select(
@@ -304,8 +315,19 @@ def build_journey_patterns_and_stops(
         .withColumn("journey_pattern_name", F.col("record.Name"))
         .withColumn("route_ref", F.col("record.RouteRef._ref"))
         .withColumn("route_ref_version", F.col("record.RouteRef._version"))
-        .withColumn("_jp_occ_id", F.monotonically_increasing_id())
         .withColumn("source_occurrence", _occurrence_struct_col())
+        .withColumn(
+            "_jp_occ_id",
+            F.sha2(
+                F.to_json(
+                    F.struct(
+                        F.col("publication_id").alias("publication_id"),
+                        F.col("source_occurrence").alias("source_occurrence"),
+                    )
+                ),
+                256,
+            ),
+        )
     )
 
     route_targets = routes_df.select(
@@ -442,8 +464,21 @@ def build_journey_patterns_and_stops(
         )
         .withColumn("for_boarding_raw", F.col("record.ForBoarding"))
         .withColumn("for_alighting_raw", F.col("record.ForAlighting"))
-        .withColumn("_stop_occ_id", F.monotonically_increasing_id())
         .withColumn("source_occurrence", _occurrence_struct_col())
+        .withColumn(
+            "_stop_occ_id",
+            F.sha2(
+                F.to_json(
+                    F.struct(
+                        F.col("publication_id").alias("publication_id"),
+                        F.col("source_occurrence").alias("source_occurrence"),
+                        F.col("pattern_stop_point_id").alias("pattern_stop_point_id"),
+                        F.col("source_order_int").alias("source_order_int"),
+                    )
+                ),
+                256,
+            ),
+        )
     )
 
     jpp_with_ssp = jpp_base.join(
@@ -640,8 +675,19 @@ def build_journeys(
         .withColumn(
             "validity_conditions", F.col("record.validityConditions.AvailabilityCondition")
         )
-        .withColumn("_sj_occ_id", F.monotonically_increasing_id())
         .withColumn("source_occurrence", _occurrence_struct_col())
+        .withColumn(
+            "_sj_occ_id",
+            F.sha2(
+                F.to_json(
+                    F.struct(
+                        F.col("publication_id").alias("publication_id"),
+                        F.col("source_occurrence").alias("source_occurrence"),
+                    )
+                ),
+                256,
+            ),
+        )
     )
 
     jp_targets = journey_patterns_df.select(
