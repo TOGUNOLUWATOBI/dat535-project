@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Start the Streamlit Gold explorer (read-only) on all network interfaces.
+# Start the Streamlit punctuality explorer (read-only) on all network interfaces.
+# Reads the Gold run in DAT535_GOLD_RUN (default: gold-kol-53d-2026-v2 under the data root).
 # Open http://<server-ip>:8501 or http://localhost:8501 through SSH forwarding.
 # Uses its own environment so the Spark processing environment is untouched:
 #   python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements.txt

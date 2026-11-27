@@ -4,7 +4,8 @@ A data engineering pipeline for Entur's national NeTEx timetable exports,
 filtered to **Kolumbus** (`KOL`, Rogaland) and **Agder Kollektivtrafikk**
 (`AKT`). It keeps the raw source with full provenance, builds validated Parquet
 tables with Spark (Bronze → staging → Silver → Gold), tracks how routes change
-between exports, and shows the result in a Streamlit GUI.
+between exports, and shows Kolumbus punctuality (real-time SIRI ET vs the
+published NeTEx plan) in a Streamlit GUI.
 
 **Data.** Nine historical exports dated the 15th of each month (January–September
 2026), calendar-support exports that fill whole service months, and scheduled
@@ -13,9 +14,8 @@ completed 22 jobs and passed full-month coverage for January–November; January
 September holds 1,918,707 planned departures over all 273 days
 ([verified runs](docs/evidence/verified_runs.md)).
 
-These are **published plans**, not records of what vehicles actually ran. The
-GUI shows service dates up to today (Norway) by default; future plans can be
-switched on with **Include future timetable plans**.
+NeTEx exports are **published plans**; punctuality comes from comparing them,
+and the SIRI ET real-time targets, with times reported by vehicles (see [GUI](#gui)).
 
 ## Documents
 
@@ -175,51 +175,43 @@ checkout or with less than 2 GiB free. On the school server the service is
 
 ## GUI
 
-A read-only Streamlit app over Gold and route history; it reads Parquet with
-pandas and never starts Spark. `bash scripts/run_gui.sh --restart` runs it in the
-background (log: `$DAT535_DATA_ROOT/metadata/gui.log`). It listens on
-`0.0.0.0:8501` (all interfaces, including localhost). VS Code or SSH port
-forwarding to `http://localhost:8501` still works. For direct school-server
-access, open `http://152.94.163.144:8501` when inbound TCP 8501 is allowed by
-the school/cloud and host firewalls. The app has no login. Override
-`DAT535_DATA_ROOT`, `DAT535_GUI_PORT` and `DAT535_GUI_PYTHON` as needed.
+A read-only Streamlit app, `app/gold_app.py`, over the punctuality Gold run
+`/srv/dat535/data/gold/kol/runs/gold-kol-53d-2026-v2` (Kolumbus, 53 sampled
+days, 2026-01-01 → 2026-11-19). It never starts Spark: small tables are read
+with pandas, the two large ones (`daily_stop_punctuality`, `journey_performance`)
+with PyArrow filter pushdown. Stop names and the stops each line serves are read
+once from Silver (`journey_pattern_stops`, `netex_stop_calls`), since Gold only
+stores quay IDs.
 
-| Page | Shows |
+`bash scripts/run_gui.sh --restart` runs it in the background (log:
+`$DAT535_DATA_ROOT/metadata/gui.log`) on `0.0.0.0:8501`; use SSH/VS Code port
+forwarding to `http://localhost:8501`. No login. Override `DAT535_GOLD_RUN`,
+`DAT535_SILVER_RUNS`, `DAT535_GUI_PORT` and `DAT535_GUI_PYTHON` as needed.
+
+The sidebar filters apply to every page: season or month, bus or boat (never
+blended), departures or arrivals, and the baseline: **live schedule** (`et_aimed`,
+SIRI ET) or **printed timetable** (`netex_planned`, NeTEx).
+
+| Page | Answers |
 | --- | --- |
-| Overview | Departures, active lines, daily mean and coverage for a month, operator and mode |
-| Daily service | Departures and active lines per date, with source export and CSV |
-| Compare months | Monthly totals, change, daily means, weekday profiles, line gains and losses |
-| One line | Service, observed versions, changes and stops for one line |
-| What changed | Lines appeared/disappeared between exports, verified explanations, stops no longer served |
-| Replaced lines | A verified replacement with old/new departures and the operator source |
-| Data checks | Quality-gate results, reconciliation and excluded occurrences |
+| 📊 Overview | How punctual is Kolumbus? On-time, late, very late, typical and worst-5% delay (with the difference to the other baseline), trips tracked live and cancelled; departures × arrivals × baselines; how often the live schedule matched the timetable; the year by season/month; bus vs boat; day-by-day charts |
+| 🚏 Lines | Which lines perform worst or best? Searchable ranking by late rate, worst-5% delay, cancellations or timetable match, then one line's departures/arrivals and daily trend |
+| 📍 Stops | Where do delays build up? Named quays ranked by late rate, for a period or one day, optionally only those on one line |
+| 🔁 Journeys | Do trips start late or lose time on the way? First-stop vs last-stop delay for a line and day |
+| 🩺 Data quality | Can the numbers be trusted? Quality gate, live-feed availability, matching coverage and why stops were not measurable |
 
-Monthly source selection runs in the pipeline, before the GUI reads the results.
-Each date uses the newest export that covers it for both operators; exports are
-never added together and missing lines are not filled from older exports.
-Averages divide by all covered calendar days, including days without service.
-Data is cached for 60 seconds; **Refresh data** clears it.
+Every period number is shown with its sample (days, date range, weekdays),
+because each month is 4–5 sampled days. Rates with nothing to measure are
+`NULL` in Gold and shown as `—`, never `0%`.
 
-The additional output lives under `gold/entur/monthly/monthly-*/`:
+**Known issues in Gold run `gold-kol-53d-2026-v2`** (the GUI says so where they matter):
 
-- `daily_line_service`: selected line/day rows, retaining `snapshot_date` and `source_export`.
-- `daily_coverage`: every calendar date, its chosen export, provider selection and coverage flag.
-- `metadata/manifest.json`: source paths and manifest hashes, selection policy, reconciliation and monthly coverage.
-
-Pandas combines the small Gold aggregates; Spark still handles XML, staging,
-Silver and the per-publication metrics. Original publication outputs remain
-available for route history and quality checks. Missing coverage is unknown;
-a covered date without selected service is zero. The GUI's today/future toggle
-only changes the display, never the saved source selection.
-
-Run `bash scripts/run.sh monthly --data-root /srv/dat535/data` once after pulling
-this change, then restart the GUI. This uses the existing completed Gold outputs;
-a historical XML/Silver rebuild is unnecessary. Both scheduled ingestion and
-`rebuild` now publish this output automatically. Source checkpoint hashes are
-verified before publication. Identical inputs reuse a verified monthly output;
-changed inputs/code or damaged outputs produce a new attempt. `current.json`
-changes atomically only after success. The GUI refuses missing or outdated
-monthly results and shows the command to refresh them.
+- Live (SIRI) trips are not linked to timetable trips at trip level, so
+  `journey_performance` has no first/last-stop delays and
+  `scheduled_with_et_journey_count` is 0. Stop-level punctuality is unaffected.
+- 2,586 quay-days differ from the timetable by more than an hour (down to
+  −7.4 h), most likely a date/time matching issue. It pulls the *average*
+  NeTEx delay and disagreement far below zero; the medians are unaffected.
 
 ## Configuration
 
@@ -241,7 +233,7 @@ one. Never commit credentials.
 ## Repository layout
 
 ```text
-app/            Streamlit pages, Gold readers and analysis helpers
+app/            gold_app.py: the Streamlit punctuality explorer
 config/         Quality thresholds and route-change evidence
 pipeline/
   ingestion/    Historical, scheduled, manual and calendar-support commands; netex.py has shared source handling
@@ -284,7 +276,7 @@ real Spark transformations and GUI behaviour.
 ```bash
 python3 -B -m unittest discover -s tests -t . -v   # skips Spark/GUI tests when PySpark/Streamlit are missing
 bash scripts/run.sh tests -v                       # everything, with Spark
-~/dat535-gui-env/bin/python -B -m unittest tests.test_app tests.test_analytics tests.test_data -v
+~/dat535-gui-env/bin/python -B -m unittest tests.test_app -v   # every GUI page against the Gold run
 ```
 
 ## Data licence

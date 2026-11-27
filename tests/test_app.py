@@ -1,136 +1,44 @@
-"""Exercise visible filter results with published-data fixtures, without Spark."""
+"""Every GUI page renders without errors against the published Gold run (skipped when absent)."""
 
 import importlib.util
+import os
 from pathlib import Path
 import unittest
-from unittest.mock import patch
 
-from tests.fixtures import current_month_fixture, service_fixture
+GOLD = Path(os.environ.get("DAT535_GOLD_RUN", "/srv/dat535/data/gold/kol/runs/gold-kol-53d-2026-v2"))
+PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🔁 Journeys", "🩺 Data quality"]
 
 
-@unittest.skipUnless(importlib.util.find_spec("streamlit") and importlib.util.find_spec("pandas"),
-                     "Install requirements.txt for GUI interaction tests")
-class GuiInteractionTests(unittest.TestCase):
-    def setUp(self):
-        import streamlit as st
-        st.cache_data.clear()
-        self.daily, self.items = service_fixture()
-
-    def tearDown(self):
-        import streamlit as st
-        st.cache_data.clear()
-
-    def run_app(self, items, daily):
-        from app import data
+@unittest.skipUnless(importlib.util.find_spec("streamlit") and (GOLD / "gold_manifest.json").is_file(),
+                     "Needs Streamlit and the Gold run")
+class GoldAppTests(unittest.TestCase):
+    def open(self, page, period_type="season", mode="bus", event="departure", baseline="et_aimed"):
         from streamlit.testing.v1 import AppTest
-        self.enterContext(patch.object(data, "snapshots", return_value=items))
-        from pipeline.processing.monthly import select_plans
-        self.enterContext(patch.object(data, "read_monthly", return_value=select_plans(daily, items)))
-        self.enterContext(patch.object(data, "History", side_effect=SystemExit("No route history yet")))
-        path = Path(__file__).resolve().parents[1] / "app/gold_app.py"
-        app = AppTest.from_file(str(path), default_timeout=20).run()
-        self.assertFalse(app.exception)
-        return app
+        app = AppTest.from_file("app/gold_app.py", default_timeout=180).run()
+        for index, value in enumerate([page, period_type, mode, event, baseline]):
+            app.sidebar.radio[index].set_value(value)
+        return app.run()
 
-    def metrics(self, app):
-        self.assertFalse(app.exception)
-        return {metric.label: metric.value for metric in app.metric}
+    def test_every_page_and_filter_combination_renders(self):
+        for page in PAGES:
+            for filters in [("season", "bus", "departure", "et_aimed"), ("month", "water", "arrival", "netex_planned")]:
+                with self.subTest(page=page, filters=filters):
+                    self.assertEqual([e.value for e in self.open(page, *filters).exception], [])
 
-    def test_filters_update_cards_and_comparison_when_service_is_zero(self):
-        app = self.run_app(self.items, self.daily)
-        self.assertEqual(self.metrics(app)["Planned departures"], "55")
-        app.selectbox(key="overview_operator").set_value("AKT").run()
-        app.selectbox(key="overview_mode").set_value("Boat").run()
-        self.assertEqual(self.metrics(app)["Planned departures"], "0")
-        self.assertEqual(self.metrics(app)["Lines with service"], "0")
+    def test_unknown_rate_shows_dash_not_zero(self):
+        metrics = {m.label: m.value for m in self.open(PAGES[0]).metric}
+        self.assertEqual(metrics["Trips cancelled"], "—")  # no bus trip has a known cancellation state
 
-        app.sidebar.radio[0].set_value("Compare months").run()
-        app.selectbox(key="compare_operator").set_value("AKT").run()
-        app.selectbox(key="compare_mode").set_value("Boat").run()
-        values = self.metrics(app)
-        self.assertEqual((values["Earlier departures"], values["Later departures"], values["Change"]),
-                         ("5", "0", "-100.0%"))
-        app.radio(key="compare_lines").set_value("New service in window").run()
-        self.assertFalse(app.exception)
-        self.assertTrue(any("No lines match" in info.value for info in app.info))
-
-    def test_single_export_without_history_still_has_a_working_overview(self):
-        first = self.items[0]
-        app = self.run_app([first], self.daily[self.daily.snapshot_date == first["snapshot_date"]])
-        self.assertEqual(self.metrics(app)["Planned departures"], "34")
-        app.sidebar.radio[0].set_value("Compare months").run()
-        self.assertFalse(app.exception)
-        self.assertTrue(any("at least two published months" in info.value for info in app.info))
-        app.sidebar.radio[0].set_value("One line").run()
-        self.assertFalse(app.exception)
-        self.assertTrue(any("Route history is not available" in info.value for info in app.info))
-
-    def test_daily_view_shows_partial_month_coverage_and_zero_service_filters(self):
-        app = self.run_app(self.items, self.daily)
-        app.sidebar.radio[0].set_value("Daily service").run()
-        values = self.metrics(app)
-        self.assertEqual(values["Dates with published coverage"], "7 / 28")
-        self.assertEqual(values["Departures on covered dates"], "55")
-        shown = app.dataframe[0].value
-        self.assertEqual((shown.date_status == "No published plan").sum(), 21)
-        self.assertTrue(any("21 dates have no published coverage" in info.value for info in app.info))
-        app.selectbox(key="daily_operator").set_value("AKT").run()
-        app.selectbox(key="daily_mode").set_value("Boat").run()
-        self.assertEqual(self.metrics(app)["Departures on covered dates"], "0")
-        self.assertEqual(self.metrics(app)["Dates with published coverage"], "7 / 28")
-        app.selectbox(key="daily_month").set_value("2026-01").run()
-        self.assertEqual(self.metrics(app)["Dates with published coverage"], "7 / 31")
-        self.assertEqual(self.metrics(app)["Departures on covered dates"], "5")
-
-    def test_exclusion_details_separate_on_demand_from_invalid(self):
+    def test_stops_have_names_and_line_filter_narrows_them(self):
+        app = self.open(PAGES[2])
+        everything = len(app.dataframe[0].value)
+        self.assertNotIn("(unnamed)", list(app.dataframe[0].value["Stop"])[:20])
         import pandas as pd
-        from app import data
-        self.items[-1]["gold_manifest"].update(
-            tables={"excluded_service_dates": {"path": "excluded_service_dates"}},
-            reconciliation={"excluded_service_occurrences": 23, "counts_match": True})
-        app = self.run_app(self.items, self.daily)
-        excluded = pd.DataFrame({"provider": ["KOL"] * 23, "is_valid": [True] * 23,
-                                 "is_flexible": [True] * 23})
-        with patch.object(data, "gold_table", return_value=excluded):
-            app.sidebar.radio[0].set_value("Data checks").run()
-        values = self.metrics(app)
-        self.assertEqual(values["Valid on-demand occurrences"], "23")
-        self.assertEqual(values["Invalid occurrences"], "0")
-        self.assertEqual(values["Unclassified occurrences"], "0")
-
-    def test_quality_metrics_include_warned_and_older_unchecked_outputs(self):
-        self.items[0]["gold_manifest"]["quality_gate"] = {"status": "pass"}
-        self.items[1]["gold_manifest"]["quality_gate"] = {"status": "warn"}
-        older = {"snapshot_date": "2026-03-15", "service_from": "2026-03-15", "service_to": "2026-03-21",
-                 "gold_manifest": {"providers": ["AKT", "KOL"]}}
-        app = self.run_app([*self.items, older], self.daily)
-        app.sidebar.radio[0].set_value("Data checks").run()
-        values = self.metrics(app)
-        self.assertEqual(values["Published exports"], "3")
-        self.assertEqual(values["Passed quality gate"], "1")
-        self.assertEqual(values["Warnings / older unchecked"], "2")
-
-    def test_november_defaults_to_today_and_full_plan_requires_opt_in(self):
-        from datetime import date
-        self.enterContext(patch("app.analytics.today_in_oslo", return_value=date(2026, 11, 10)))
-        daily, items = current_month_fixture()
-        app = self.run_app(items, daily)
-        self.assertEqual(self.metrics(app)["Planned departures"], "30")
-        app.sidebar.radio[0].set_value("Daily service").run()
-        self.assertEqual(self.metrics(app)["Dates with published coverage"], "10 / 10")
-        table = app.dataframe[0].value
-        self.assertEqual(len(table), 10)
-        self.assertEqual(str(table.service_date.max().date()), "2026-11-10")
-        app.sidebar.checkbox(key="include_future").set_value(True).run()
-        self.assertEqual(self.metrics(app)["Departures on covered dates"], "330")
-        table = app.dataframe[0].value
-        self.assertEqual(len(table), 30)
-        self.assertEqual((table.date_status == "Future timetable plan").sum(), 20)
-        self.assertTrue(any("future timetable plans" in message.value for message in app.info))
-        app.sidebar.checkbox(key="include_future").set_value(False).run()
-        app.sidebar.radio[0].set_value("Compare months").run()
-        values = self.metrics(app)
-        self.assertEqual((values["Earlier departures"], values["Later departures"]), ("20", "30"))
+        lines = pd.read_parquet(GOLD / "period_line_service", columns=["line_id", "transport_mode"])
+        line = lines[lines.transport_mode == "bus"].line_id.dropna().iloc[0]
+        next(s for s in app.selectbox if s.label == "Only stops on line").set_value(line).run()
+        self.assertEqual([e.value for e in app.exception], [])
+        self.assertLess(len(app.dataframe[0].value), everything)
 
 
 if __name__ == "__main__":

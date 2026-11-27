@@ -45,7 +45,6 @@ class MonthlyGoldTests(unittest.TestCase):
 
     def test_overlap_chooses_whole_export_without_backfill_or_filter_dependence(self):
         import pandas as pd
-        from app.analytics import daily_month
         from pipeline.processing.monthly import select_plans
         newer = dict(self.items[0], snapshot_date="2026-01-16", service_from="2026-01-16", service_to="2026-01-22")
         future = dict(newer, snapshot_date="2026-01-25", service_from="2026-01-15", service_to="2026-01-31")
@@ -54,14 +53,16 @@ class MonthlyGoldTests(unittest.TestCase):
         row = self.daily.iloc[[0]].assign(snapshot_date="2026-01-16", service_date="2026-01-16", scheduled_departures=100)
         hindsight = row.assign(snapshot_date="2026-01-25", service_date="2026-01-15", scheduled_departures=777)
         lines, calendar = select_plans(pd.concat([self.daily, row, hindsight]), [*self.items, newer, future])
-        result = daily_month(lines, calendar, "2026-01").set_index("service_date")
-        self.assertEqual(result.loc["2026-01-15", "departures"], 17)
-        self.assertEqual(result.loc["2026-01-16", "departures"], 100)
-        self.assertEqual(result.loc["2026-01-16", "active_lines"], 1)
-        self.assertFalse(result.loc["2026-01-23", "covered"])
-        kol = daily_month(lines, calendar, "2026-01", ["KOL"]).set_index("service_date")
-        self.assertEqual(kol.loc["2026-01-16", "source_export"], "2026-01-16")
-        self.assertEqual(kol.loc["2026-01-16", "departures"], 0)
+        dates = pd.to_datetime(lines.service_date).dt.strftime("%Y-%m-%d")
+        departures = lines.groupby(dates).scheduled_departures.sum()
+        self.assertEqual(departures["2026-01-15"], 17)
+        self.assertEqual(departures["2026-01-16"], 100)
+        self.assertEqual(lines[dates == "2026-01-16"].line_entity_id.nunique(), 1)
+        coverage = calendar.assign(service_date=pd.to_datetime(calendar.service_date).dt.strftime("%Y-%m-%d"))
+        coverage = coverage.set_index("service_date")
+        self.assertFalse(coverage.covered.get("2026-01-23", False))
+        self.assertEqual(coverage.loc["2026-01-16", "source_export"], "2026-01-16")
+        self.assertEqual(lines[(dates == "2026-01-16") & (lines.provider == "KOL")].scheduled_departures.sum(), 0)
 
     def test_coverage_requires_both_providers_and_includes_days_before_publication(self):
         from pipeline.processing.monthly import select_plans
