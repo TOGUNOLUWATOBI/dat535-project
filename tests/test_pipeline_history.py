@@ -78,7 +78,9 @@ class PipelineHistoryTests(unittest.TestCase):
             history.publish(root, dest)
             history.publish(root, dest)
             self.assertEqual(old_file.read_bytes(), b"historical archive")
-            records = json.loads((dest / "bronze/netex/kol/manifest.json").read_text())["records"]
+            published = json.loads((dest / "bronze/netex/kol/manifest.json").read_text())
+            self.assertIn("updated_at", published)
+            records = published["records"]
             self.assertEqual({r["target_date"] for r in records}, {"2026-01-01", "2026-11-26"})
             self.assertTrue(all(Path(r["file"]).is_relative_to(dest) for r in records))
             self.assertTrue((old_silver / "silver_manifest.json").is_file())

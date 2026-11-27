@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -110,7 +111,10 @@ def publish(root: Path, destination: Path) -> None:
                 raise ValueError(f"Existing Bronze file differs: {target}")
             additions.append((source, target))
             records[record["target_date"]] = {**record, "file": str(target)}
-        manifests.append((target_manifest, {**existing, "records": sorted(records.values(), key=lambda row: row["target_date"])}))
+        manifests.append((target_manifest, {
+            **existing, "updated_at": datetime.now(timezone.utc).isoformat(),
+            "records": sorted(records.values(), key=lambda row: row["target_date"]),
+        }))
 
     silver_destination = destination / "silver/kol/runs"
     new_silver = root / "silver/kol/runs"

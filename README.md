@@ -114,10 +114,12 @@ because each month is only 4–5 sampled days.
 ## Deployment
 
 `.github/workflows/prod.yml` runs daily at **07:15 UTC** and after every push to
-`main`, including merged pull requests, using that exact commit. It replaces the GUI-only workflow and
+`main`, including merged pull requests, using that exact commit. It replaces the
+GUI-only workflow and
 runs **Bronze NeTEx + SIRI ET → Staging → Silver → Gold → all GUI page checks**
 for **yesterday in Europe/Oslo**. Only the new day's Bronze, Staging and Silver
-are processed; Gold includes the existing Silver history plus that day. Each build writes new outputs under
+are processed; Gold includes the existing Silver history plus that day. Each
+build writes new outputs under
 `/srv/dat535/data/prod/runs/gh-<run-id>-<attempt>/`, with Gold run ID `prod-gold`.
 After all checks pass, it restarts the production GUI on **8501** against those
 outputs and checks that the port answers. After checks pass, new Bronze files
@@ -125,9 +127,11 @@ and manifest records are added to `/srv/dat535/data/bronze/`, new Silver days
 are registered under `/srv/dat535/data/silver/kol/runs/`, and the cumulative
 Gold run is registered under `/srv/dat535/data/gold/kol/runs/`. Staging outputs
 remain in the dated run directory, recorded in `metadata/production_runs/`.
-Existing dates are retained; reruns reuse existing Silver authority and refuse
-to replace a historical Bronze file with different contents. Failed builds keep their logs and
-leave the running GUI alone.
+Registered Silver and Gold paths link to successful production run directories;
+retain those directories while they are referenced by history or the live GUI.
+Existing dates are retained; reruns reuse existing Silver authority and keep
+the original Bronze files. Failed builds keep their logs and leave the running
+GUI alone.
 Pushes to the development branch validate the production workflow without
 starting a production build or deployment.
 
@@ -164,7 +168,7 @@ The `dat535` runner service must be running on the server:
   the existing published upstream inputs; it does not overwrite them. Silver
   backfills are split into at most five dates per batch.
 - Scheduled successes deploy the development GUI on **8502**. Manual runs can
-  opt into deployment. The main GUI on **8501** uses the existing workflow.
+  opt into deployment. The main GUI on **8501** uses the production workflow.
   Development uses a separate checkout directory and the exact validated commit.
 - Layer logs and elapsed times are attached as seven-day GitHub artifacts and
   recorded in the run's `metadata/run.json`. Failed runs retain their diagnostics;
