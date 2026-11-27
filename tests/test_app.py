@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 
 GOLD = Path(os.environ.get("DAT535_GOLD_RUN", "/srv/dat535/data/gold/kol/runs/gold-kol-53d-2026-v2"))
-PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🩺 Data quality"]
+PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🔄 Changes", "🩺 Data quality"]
 
 
 @unittest.skipUnless(importlib.util.find_spec("streamlit") and (GOLD / "gold_manifest.json").is_file(),
@@ -40,6 +40,15 @@ class GoldAppTests(unittest.TestCase):
         next(s for s in app.selectbox if s.label == "Only stops on line").set_value(line).run()
         self.assertEqual([e.value for e in app.exception], [])
         self.assertLess(len(app.dataframe[0].value), everything)
+
+    def test_changes_page_finds_known_2026_changes(self):
+        app = self.open(PAGES[3])
+        started = list(app.dataframe[0].value["Line"])
+        self.assertIn("12", started)  # line 12 started with the summer timetable on 1 July
+        self.assertNotIn("1", started)  # line 1 only got a new internal ID: not a new line
+        rerouted = " ".join(app.dataframe[1].value["Line · changed between"])
+        self.assertIn("Line 1 · ", rerouted)  # ... but its route did change
+        self.assertEqual([e.value for e in app.exception], [])
 
 
 if __name__ == "__main__":

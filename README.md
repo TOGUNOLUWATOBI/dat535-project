@@ -105,6 +105,7 @@ timetable side by side.
 | 📊 Overview | How punctual is Kolumbus? On time, late, very late, typical and worst-5% delay, trips tracked and cancelled; live schedule vs timetable; the year by season or month; bus vs boat; day by day |
 | 🚏 Lines | Which lines perform worst or best? Searchable ranking, then one line's departures/arrivals and daily trend |
 | 📍 Stops | Where do delays build up? Named quays ranked by late rate, for a period or one day, optionally on one line |
+| 🔄 Changes | When did lines start or end, and when did a line's route change (stops added or dropped)? Read from Silver's planned stop calls; dated to the first sampled day a change shows up |
 | 🩺 Data quality | Can the numbers be trusted? Quality gate, live feed, matching coverage, why stops were not measurable |
 
 Every period number is shown with its sample (days, date range, weekdays),

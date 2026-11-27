@@ -1,8 +1,8 @@
 """Kolumbus punctuality explorer over the Gold run (read-only, no Spark).
 
-Pages: Overview, Lines, Stops, Data quality. Small Gold tables are read whole and cached;
+Pages: Overview, Lines, Stops, Changes, Data quality. Small Gold tables are read whole and cached;
 the large stop table is read with PyArrow filter pushdown.
-Stop names and the stops each line serves come from Silver, since Gold stores only quay IDs.
+Stop names, the stops each line serves and the timetable changes come from Silver, since Gold stores only quay IDs.
 
 Start with:  bash src/app/run_gui.sh --restart
 """
@@ -62,7 +62,7 @@ REASONS = {  # Gold exclusion codes -> why a stop event could not be measured
 st.set_page_config(page_title="Kolumbus punctuality", page_icon="🚌", layout="wide")
 
 
-# ---------------------------------------------------------------- reading (cached)
+# Reading (cached)
 
 @st.cache_data(show_spinner=False, max_entries=64)
 def table(name, columns=None, filters=None):
@@ -93,6 +93,66 @@ def stop_lookup():
     return dict(zip(names.quay_id, names.stop_point_name)), pd.concat(served).dropna().drop_duplicates()
 
 
+REGULAR_START = pd.Timestamp("2026-01-08")  # 1 January is a public holiday with reduced service
+MIN_DAYS = 3  # a line or stop must show up on this many sampled days to count (filters one-off diversions)
+
+
+@st.cache_data(show_spinner="Finding timetable changes …")
+def timetable_changes():
+    """New/ended lines and stops added to or dropped from a line, from the planned stop calls in Silver.
+
+    A line is its public number (e.g. '3') plus transport mode, so a new internal line ID with the same
+    number is not counted as a new line. A change is dated to the first sampled day it shows up on; it
+    happened somewhere between the line's previous sampled run (`since`) and that day.
+    """
+    served, trips = [], []
+    columns = ["operating_date", "resolved_public_code", "resolved_transport_mode", "quay_id", "service_journey_id"]
+    for run in sorted(SILVER.glob("*/")):
+        calls = pd.read_parquet(run / "netex_stop_calls", columns=columns).dropna(
+            subset=["resolved_public_code", "quay_id"])
+        served.append(calls.drop(columns="service_journey_id").drop_duplicates())
+        trips.append(calls.groupby(["operating_date", "resolved_public_code"], observed=True).service_journey_id.nunique())
+    served = pd.concat(served).rename(columns={"resolved_public_code": "line", "resolved_transport_mode": "mode"})
+    served["operating_date"] = pd.to_datetime(served.operating_date)
+    trips = pd.concat(trips).groupby(level=[0, 1]).sum()
+    end_cutoff = served.operating_date.max() - pd.Timedelta(days=14)  # weekend-only lines skip the last days
+
+    runs = served[["line", "mode", "operating_date"]].drop_duplicates().sort_values(["line", "operating_date"])
+    runs["prev_run"] = runs.groupby("line").operating_date.shift()
+    runs["next_run"] = runs.groupby("line").operating_date.shift(-1)
+    all_dates = sorted(served.operating_date.unique())
+
+    lines_ = runs.groupby("line").agg(mode=("mode", "first"), first=("operating_date", "min"),
+                                      last=("operating_date", "max"), days=("operating_date", "nunique"))
+    lines_["trips_per_day"] = trips.groupby(level=1).mean().reindex(lines_.index)
+    started = (lines_["first"] > REGULAR_START) & (lines_.days >= MIN_DAYS)
+    ended = (lines_["last"] < end_cutoff) & (lines_.days >= MIN_DAYS)
+    lines_["status"] = None
+    lines_.loc[started, "status"] = "🆕 Started"
+    lines_.loc[ended, "status"] = "⛔ Ended"
+    lines_.loc[started & ended, "status"] = "🔁 Ran for a while"
+    before = lambda d: max((x for x in all_dates if x < d), default=pd.NaT)
+    after = lambda d: min((x for x in all_dates if x > d), default=pd.NaT)
+    lines_["not_yet_on"] = lines_["first"].map(before)
+    lines_["gone_by"] = lines_["last"].map(after)
+    lines_ = lines_[lines_.status.notna()].reset_index()
+
+    stops_ = served.groupby(["line", "quay_id"]).operating_date.agg(["min", "max", "nunique"]).reset_index()
+    stops_ = stops_.join(runs.groupby("line").operating_date.agg(line_first="min", line_last="max"), on="line")
+    added = stops_[(stops_["min"] > stops_.line_first) & (stops_["min"] > REGULAR_START)
+                   & (stops_["nunique"] >= MIN_DAYS)]
+    dropped = stops_[(stops_["max"] < stops_.line_last) & (stops_["max"] < end_cutoff)
+                     & (stops_["nunique"] >= MIN_DAYS)]
+    keyed = runs.set_index(["line", "operating_date"])
+    added = added.assign(change="➕ Added", operating_date=added["min"]).join(
+        keyed["prev_run"].rename("since"), on=["line", "operating_date"])
+    dropped = dropped.join(keyed["next_run"], on=["line", "max"]).assign(change="➖ Dropped")
+    dropped = dropped.assign(operating_date=dropped.next_run, since=dropped["max"])
+    stops_ = pd.concat([added, dropped])[["line", "operating_date", "since", "change", "quay_id"]]
+    stops_ = stops_.merge(runs[["line", "mode"]].drop_duplicates("line"), on="line")
+    return lines_, stops_
+
+
 def by_rates(frame, keys):
     """Add up counts per group and recompute rates; a rate is empty (—) when nothing was measured."""
     g = frame.groupby(keys, as_index=False, dropna=False)[COUNTS].sum()
@@ -107,7 +167,7 @@ def ratio(part, whole):
     return part / whole if whole else None  # zero denominator -> no rate (—), never 0 %
 
 
-# ---------------------------------------------------------------- display helpers
+# Display helpers
 
 def fmt_pct(v):
     return "—" if v is None or pd.isna(v) else f"{v:.1%}"
@@ -164,7 +224,7 @@ def chart(c):
     st.altair_chart(c, use_container_width=True)
 
 
-# ---------------------------------------------------------------- sidebar: one set of filters for every page
+# Sidebar: one set of filters for every page
 
 meta = read_json("gold_manifest.json")
 SEASON_WINDOWS = meta["season_windows_2026"]
@@ -173,7 +233,7 @@ network = table("period_network_punctuality")
 
 st.sidebar.title("🚌 Kolumbus punctuality")
 st.sidebar.caption(f"{len(meta['published_operating_dates'])} sampled days in 2026")
-page = st.sidebar.radio("Page", ["📊 Overview", "🚏 Lines", "📍 Stops", "🩺 Data quality"],
+page = st.sidebar.radio("Page", ["📊 Overview", "🚏 Lines", "📍 Stops", "🔄 Changes", "🩺 Data quality"],
                         label_visibility="collapsed")
 st.sidebar.divider()
 months = sorted(network.loc[network.period_type == "month", "period_label"].unique())
@@ -210,7 +270,7 @@ dates_in_period = [d for d in meta["published_operating_dates"] if str(start) <=
 scope = f"{MODES[mode]} · {EVENTS[event].lower()} · {period_name(period)}"
 
 
-# ---------------------------------------------------------------- pages
+# Pages
 
 def overview():
     st.title("How punctual is Kolumbus?")
@@ -401,6 +461,76 @@ def stops():
                            "worst_day_p95_delay_sec", "eligible_event_count", "quay_id"], height=380)
 
 
+def changes():
+    st.title("When did lines start, stop or change route?")
+    whole_year = st.toggle("Whole year", value=True, help="Off: only changes first seen in the selected period.")
+    st.caption(f"{MODES[mode]} · {'all of 2026' if whole_year else period_name(period)}. The timetable is "
+               f"checked on {len(meta['published_operating_dates'])} sampled days, so a change is dated to the first "
+               "sampled day it shows up on; it happened between the previous sampled day and that day. A line is "
+               "its public number, so a line that keeps its number but gets a new internal ID is not 'new'.")
+    lines_, stops_ = timetable_changes()
+    names, _ = stop_lookup()
+    lines_, stops_ = lines_[lines_["mode"] == mode], stops_[stops_["mode"] == mode]
+    if not whole_year:
+        in_range = lambda d: d.between(pd.Timestamp(start), pd.Timestamp(end))
+        lines_ = lines_[in_range(lines_["first"]) | in_range(lines_["gone_by"])]
+        stops_ = stops_[in_range(stops_.operating_date)]
+
+    routes = (stops_.groupby(["line", "operating_date", "since"])
+              .agg(added=("change", lambda c: (c == "➕ Added").sum()),
+                   dropped=("change", lambda c: (c == "➖ Dropped").sum())).reset_index())
+    min_stops = st.number_input("Count a route change when at least this many stops are added or dropped", 1,
+                                value=3, help="Small changes are often a single stop moved or a school trip.")
+    routes = routes[routes.added + routes.dropped >= min_stops]
+
+    k = st.columns(3)
+    k[0].metric("Lines started", int(lines_.status.isin(["🆕 Started", "🔁 Ran for a while"]).sum()))
+    k[1].metric("Lines ended", int(lines_.status.isin(["⛔ Ended", "🔁 Ran for a while"]).sum()))
+    k[2].metric("Route changes", len(routes), help=f"{routes.line.nunique()} lines")
+
+    timeline = pd.concat([
+        pd.DataFrame({"date": lines_.loc[lines_.status != "⛔ Ended", "first"], "what": "Line started"}),
+        pd.DataFrame({"date": lines_.loc[lines_.status != "🆕 Started", "gone_by"], "what": "Line ended"}),
+        pd.DataFrame({"date": routes.operating_date, "what": "Route changed"})]).dropna()
+    if timeline.empty:
+        st.info("No changes found for this selection.")
+        return
+    chart(alt.Chart(timeline, title="Changes per sampled day").mark_bar().encode(
+        x=alt.X("yearmonthdate(date):O", title=None, axis=alt.Axis(format="%d %b", labelAngle=-45)),
+        y=alt.Y("count()", title=None), color=alt.Color("what", title=None, legend=alt.Legend(orient="bottom")),
+        tooltip=[alt.Tooltip("yearmonthdate(date):T", title="Seen on"), "what", "count()"]).properties(height=240))
+
+    st.subheader("Lines that started or ended")
+    fmt = lambda d: "—" if pd.isna(d) else f"{d:%d %b}"
+    lines_ = lines_.sort_values("first").assign(
+        started=lambda f: f.apply(lambda r: f"{fmt(r.not_yet_on)} → {fmt(r['first'])}"
+                                  if r.status != "⛔ Ended" else "—", axis=1),
+        ended=lambda f: f.apply(lambda r: f"{fmt(r['last'])} → {fmt(r.gone_by)}"
+                                if r.status != "🆕 Started" else "—", axis=1))
+    st.dataframe(lines_[["line", "status", "started", "ended", "days", "trips_per_day"]].rename(columns={
+        "line": "Line", "status": "What happened", "started": "Started (between)", "ended": "Ended (between)",
+        "days": "Sampled days running", "trips_per_day": "Trips per day"}).style.format({"Trips per day": "{:.0f}"}),
+        hide_index=True, use_container_width=True)
+    st.caption("'Started between 22 Apr → 1 May' means it did not run on 22 April and did on 1 May. "
+               "Lines that run only on holidays or a few days can look new; check 'Sampled days running'.")
+
+    st.subheader("Route changes: stops added or dropped")
+    if routes.empty:
+        st.info("No route changes this size. Lower the number above.")
+        return
+    routes = routes.sort_values(["operating_date", "line"]).assign(
+        label=lambda f: "Line " + f.line + " · " + f.since.map(fmt) + " → " + f.operating_date.map(fmt))
+    st.dataframe(routes[["label", "added", "dropped"]].rename(columns={
+        "label": "Line · changed between", "added": "Stops added", "dropped": "Stops dropped"}),
+        hide_index=True, use_container_width=True, height=300)
+    pick_ = st.selectbox("Show the stops for", routes.label.tolist())
+    row = routes[routes.label == pick_].iloc[0]
+    detail = stops_[(stops_.line == row.line) & (stops_.operating_date == row.operating_date)].assign(
+        stop=lambda f: f.quay_id.map(names).fillna("(unnamed)")).sort_values(["change", "stop"])
+    st.dataframe(detail[["change", "stop", "quay_id"]].rename(columns={
+        "change": "Change", "stop": "Stop", "quay_id": "Quay ID"}), hide_index=True, use_container_width=True)
+
+
 def quality():
     st.title("Can the numbers be trusted?")
     st.caption("Check here when a number looks odd: was the live feed missing, or were many stops not measurable?")
@@ -442,7 +572,8 @@ def quality():
               "planned_call_matching_coverage", "reported_call_matching_coverage"], height=320)
 
 
-{"📊 Overview": overview, "🚏 Lines": lines, "📍 Stops": stops, "🩺 Data quality": quality}[page]()
+{"📊 Overview": overview, "🚏 Lines": lines, "📍 Stops": stops, "🔄 Changes": changes,
+ "🩺 Data quality": quality}[page]()
 st.divider()
 st.caption(f"Read-only view of Gold run `{GOLD.name}` · Kolumbus (KOL) · {len(meta['published_operating_dates'])} "
            f"sampled days, {meta['published_operating_dates'][0]} → {meta['published_operating_dates'][-1]}.")
