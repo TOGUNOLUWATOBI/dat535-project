@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from pyspark.sql import DataFrame, SparkSession, functions as F
 
@@ -200,30 +200,6 @@ def build_silver_inventory(
     )
 
 
-def authority_lookup_df(spark: SparkSession, inventory: SilverInventory) -> DataFrame:
-    """Create a small Spark DataFrame of authoritative (operating_date, source_silver_run_id, publication_id)."""
-    rows = [
-        (
-            a.provider,
-            a.operating_date,
-            a.source_silver_run_id,
-            a.publication_id,
-            a.siri_file_available,
-        )
-        for a in inventory.authorities
-    ]
-    return spark.createDataFrame(
-        rows,
-        schema=[
-            "provider",
-            "operating_date_str",
-            "source_silver_run_id",
-            "publication_id",
-            "siri_file_available",
-        ],
-    )
-
-
 def read_silver_table_for_inventory(
     spark: SparkSession,
     inventory: SilverInventory,
@@ -283,33 +259,3 @@ def read_silver_table_for_inventory(
     for nxt in frames[1:]:
         merged = merged.unionByName(nxt, allowMissingColumns=True)
     return merged
-
-
-def enrich_uniquely(
-    fact_df: DataFrame,
-    dim_df: DataFrame,
-    join_keys: Iterable[str],
-    select_cols: Sequence[str],
-) -> DataFrame:
-    """Enrich fact_df from dim_df after verifying uniqueness on join_keys to prevent multiplication."""
-    keys = list(join_keys)
-    if not keys:
-        raise ValueError("join_keys must not be empty for dimension enrichment.")
-
-    dim_projected = dim_df.select(*dict.fromkeys(keys + list(select_cols))).dropDuplicates(keys)
-    # Guard against duplicate keys in dimension before joining
-    total_dim = dim_df.select(*keys).count()
-    distinct_dim = dim_projected.count()
-    if total_dim != distinct_dim:
-        raise ValueError(
-            f"Dimension enrichment key {keys} is not unique: {total_dim} rows vs {distinct_dim} distinct keys."
-        )
-
-    fact_count = fact_df.count()
-    enriched = fact_df.join(dim_projected, on=keys, how="left")
-    after_count = enriched.count()
-    if after_count != fact_count:
-        raise ValueError(
-            f"Fact row count changed during enrichment on {keys}: {fact_count} -> {after_count}"
-        )
-    return enriched

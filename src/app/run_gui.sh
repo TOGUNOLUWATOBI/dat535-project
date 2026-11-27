@@ -6,7 +6,7 @@
 #   python3 -m venv ~/dat535-gui-env && ~/dat535-gui-env/bin/pip install -r requirements.txt
 # --restart stops this app on its configured port and starts it in the background.
 set -euo pipefail
-project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$project_root"
 gui_python="${DAT535_GUI_PYTHON:-$HOME/dat535-gui-env/bin/python}"
 export DAT535_DATA_ROOT="${DAT535_DATA_ROOT:-/srv/dat535/data}"
@@ -15,13 +15,13 @@ if [[ ! "$gui_port" =~ ^[0-9]+$ ]]; then
   echo "DAT535_GUI_PORT must be a port number" >&2
   exit 1
 fi
-gui_command=("$gui_python" -m streamlit run app/gold_app.py --server.port "$gui_port"
-  --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false)
+gui_command=("$gui_python" -m streamlit run src/app/gold_app.py --server.port "$gui_port"
+  --server.address 0.0.0.0 --server.headless true --browser.gatherUsageStats false --theme.primaryColor "#0f766e")
 
 if [[ "${1:-}" == "--restart" ]]; then
   shift
   "$gui_python" -c 'import streamlit'  # Check the environment before stopping the app.
-  pattern="[s]treamlit run app/gold_app[.]py --server[.]port ${gui_port}([[:space:]]|$)"
+  pattern="[s]treamlit run (src/)?app/gold_app[.]py --server[.]port ${gui_port}([[:space:]]|$)"
   pkill -TERM -u "$(id -u)" -f "$pattern" || true
   for attempt in {1..10}; do
     pgrep -u "$(id -u)" -f "$pattern" >/dev/null || break

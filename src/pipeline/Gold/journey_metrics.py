@@ -20,18 +20,6 @@ from pipeline.Gold.event_metrics import (
 from pipeline.Gold.inputs import SilverInventory, read_silver_table_for_inventory
 
 
-def season_label_expr(date_col: str = "operating_date") -> F.Column:
-    """Map 2026 dates to fixed study seasons (winter-2026 is Jan-Feb 2026)."""
-    d = F.to_date(F.col(date_col))
-    expr = F.lit(None).cast("string")
-    for label, (start_s, end_s) in SEASON_WINDOWS_2026.items():
-        expr = F.when(
-            (d >= F.lit(start_s).cast("date")) & (d <= F.lit(end_s).cast("date")),
-            F.lit(label),
-        ).otherwise(expr)
-    return expr
-
-
 def build_journey_performance(
     spark: SparkSession,
     inventory: SilverInventory,

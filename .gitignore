@@ -26,5 +26,8 @@ htmlcov/
 *.log
 *.part
 
-# Generated pipeline outputs (local runs default to data/bronze/entur/...)
+# Generated pipeline outputs
 /data/
+
+# Notebook checkpoints
+.ipynb_checkpoints/

@@ -14,7 +14,7 @@ PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🩺 Data quality"]
 class GoldAppTests(unittest.TestCase):
     def open(self, page, period="winter-2026", mode="bus", event="departure"):
         from streamlit.testing.v1 import AppTest
-        app = AppTest.from_file("app/gold_app.py", default_timeout=180).run()
+        app = AppTest.from_file("src/app/gold_app.py", default_timeout=180).run()
         for index, value in enumerate([page, mode, event]):
             app.sidebar.radio[index].set_value(value)
         app.sidebar.selectbox[0].set_value(period)

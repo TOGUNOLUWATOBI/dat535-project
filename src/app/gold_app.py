@@ -4,7 +4,7 @@ Pages: Overview, Lines, Stops, Data quality. Small Gold tables are read whole an
 the large stop table is read with PyArrow filter pushdown.
 Stop names and the stops each line serves come from Silver, since Gold stores only quay IDs.
 
-Start with:  bash scripts/run_gui.sh
+Start with:  bash src/app/run_gui.sh --restart
 """
 
 import json
