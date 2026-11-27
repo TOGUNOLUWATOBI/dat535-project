@@ -121,6 +121,7 @@ jobs:
           bash src/app/run_gui.sh --restart
           for attempt in $(seq 1 15); do
             curl -sf -o /dev/null http://localhost:8502/ && exit 0
+            echo "Waiting for development GUI (attempt $attempt/15)"
             sleep 2
           done
           exit 1
@@ -129,13 +130,15 @@ jobs:
         env:
           DEV_RUN_ROOT: ${{ steps.run.outputs.run_root }}
         run: |
-          echo "### Development pipeline" >> "$GITHUB_STEP_SUMMARY"
-          echo "Output directory: \`$DEV_RUN_ROOT\`" >> "$GITHUB_STEP_SUMMARY"
-          if [[ -f "$DEV_RUN_ROOT/metadata/run.json" ]]; then
-            echo '```json' >> "$GITHUB_STEP_SUMMARY"
-            cat "$DEV_RUN_ROOT/metadata/run.json" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "### Development pipeline"
+            echo "Output directory: \`$DEV_RUN_ROOT\`"
+            if [[ -f "$DEV_RUN_ROOT/metadata/run.json" ]]; then
+              echo '```json'
+              cat "$DEV_RUN_ROOT/metadata/run.json"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always() && steps.run.outputs.run_root != ''
         with:
