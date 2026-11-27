@@ -153,7 +153,10 @@ explicitly checks out the development branch, not main's pipeline code. See
 The self-hosted `dat535` runner must have the documented Spark/GUI environments,
 Java and Google Application Default Credentials with BigQuery access. Set the
 repository variable `GCP_PROJECT_ID` if its billing project is not supplied by
-those credentials.
+those credentials. The development workflow uses the existing VM credential file
+`/home/ubuntu/.config/gcp/dat535-bq-key.json`; the repository variable
+`GOOGLE_APPLICATION_CREDENTIALS` can override this path. The runner user must be
+able to read the file. Credential contents stay on the VM.
 
 Each scheduled run is a **previous-day snapshot**, not a cumulative rebuild of
 the historical 53 dates. Existing Gold calculations and gates are unchanged,

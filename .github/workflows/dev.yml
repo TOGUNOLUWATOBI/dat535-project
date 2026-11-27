@@ -83,6 +83,7 @@ jobs:
       DAT535_SOURCE_ROOT: /srv/dat535/data
       DAT535_GUI_PYTHON: /home/ubuntu/dat535-gui-env/bin/python
       JAVA_HOME: /home/ubuntu/dat535-runtime/java17/jdk-17.0.21+9-jre
+      GOOGLE_APPLICATION_CREDENTIALS: ${{ vars.GOOGLE_APPLICATION_CREDENTIALS || '/home/ubuntu/.config/gcp/dat535-bq-key.json' }}
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v5
@@ -97,6 +98,7 @@ jobs:
           "$DAT535_GUI_PYTHON" -c 'import streamlit, pandas, pyarrow, altair'
           test -x "$JAVA_HOME/bin/java"
           if [[ "$START_LAYER" == bronze ]]; then
+            test -r "$GOOGLE_APPLICATION_CREDENTIALS"
             /home/ubuntu/spark-env/bin/python -c 'import google.auth; from google.cloud import bigquery; google.auth.default()'
           fi
       - name: Run selected layers and GUI smoke checks
