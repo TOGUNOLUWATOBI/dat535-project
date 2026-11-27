@@ -110,10 +110,11 @@ def timetable_changes():
     for run in sorted(SILVER.glob("*/")):
         calls = pd.read_parquet(run / "netex_stop_calls", columns=columns).dropna(
             subset=["resolved_public_code", "quay_id"])
+        # Hive partition columns may be categorical, especially for one-day runs.
+        calls["operating_date"] = pd.to_datetime(calls.operating_date.astype("string"))
         served.append(calls.drop(columns="service_journey_id").drop_duplicates())
         trips.append(calls.groupby(["operating_date", "resolved_public_code"], observed=True).service_journey_id.nunique())
     served = pd.concat(served).rename(columns={"resolved_public_code": "line", "resolved_transport_mode": "mode"})
-    served["operating_date"] = pd.to_datetime(served.operating_date)
     trips = pd.concat(trips).groupby(level=[0, 1]).sum()
     end_cutoff = served.operating_date.max() - pd.Timedelta(days=14)  # weekend-only lines skip the last days
 
