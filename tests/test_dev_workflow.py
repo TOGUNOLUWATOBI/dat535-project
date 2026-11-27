@@ -101,6 +101,19 @@ class DevWorkflowTests(unittest.TestCase):
         self.assertEqual(gold_command.argv[gold_command.argv.index("--gold-run-id") + 1], gold.name)
         self.assertFalse(any("/dev/" in arg for c in commands for arg in c.argv))
 
+    def test_history_plan_processes_new_days_separately_then_builds_combined_gold(self):
+        commands, _, silver = runner.build_plan(
+            ROOT, Path("/srv/dat535/data"), Path("/srv/dat535/data/prod/runs/test"),
+            ["2026-11-25", "2026-11-26"], "bronze", sys.executable, sys.executable,
+            environment="prod", history_silver=Path("/srv/dat535/data/silver/kol/runs"))
+        batches = [c for c in commands if c.name.startswith("prod-silver-")]
+        self.assertEqual([c.name for c in batches], ["prod-silver-2026-11-25", "prod-silver-2026-11-26"])
+        self.assertEqual(commands[-3].name, "prepare-history")
+        gold = commands[-2].argv
+        self.assertIn("--dates-file", gold)
+        self.assertEqual(gold[gold.index("--silver-runs-dir") + 1], str(silver))
+        self.assertEqual(silver.name, "history-runs")
+
     def test_published_directories_cannot_be_used_as_output_roots(self):
         for root in ("/srv/dat535/data", "/srv/dat535", "/srv/dat535/data/bronze/test",
                      "/srv/dat535/data/silver/kol/runs/test", "/srv/dat535/data/gold/kol/runs/test"):

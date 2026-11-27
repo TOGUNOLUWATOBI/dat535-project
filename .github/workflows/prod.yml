@@ -1,6 +1,8 @@
 name: Prod workflow
 
 on:
+  schedule:
+    - cron: '15 7 * * *'
   push:
     # Development pushes validate this workflow; main pushes also run and deploy.
     branches: [main, ft/further-refactoring-and-cleanup]
@@ -20,6 +22,10 @@ on:
         description: Deploy the production GUI after checks (main only)
         type: boolean
         default: false
+      history_silver_runs:
+        description: Existing Silver history to include in Gold (override for isolated tests)
+        type: string
+        default: /srv/dat535/data/silver/kol/runs
 
 permissions:
   contents: read
@@ -50,7 +56,7 @@ jobs:
           PY
           find src .github/scripts -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
       - name: Test pipeline orchestration
-        run: python -B -m unittest tests.test_dev_workflow -v
+        run: python -B -m unittest tests.test_dev_workflow tests.test_pipeline_history -v
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
@@ -98,15 +104,35 @@ jobs:
         env:
           PIPELINE_DATES: ${{ inputs.dates || 'yesterday' }}
           START_LAYER: ${{ inputs.start_layer || 'bronze' }}
+          HISTORY_SILVER_RUNS: ${{ github.ref == 'refs/heads/main' && '/srv/dat535/data/silver/kol/runs' || inputs.history_silver_runs || '/srv/dat535/data/silver/kol/runs' }}
         run: |
           /home/ubuntu/spark-env/bin/python .github/scripts/run_dev_pipeline.py \
             --environment prod \
+            --history-silver-runs "$HISTORY_SILVER_RUNS" \
             --source-root "$DAT535_SOURCE_ROOT" \
             --run-root "$DAT535_SOURCE_ROOT/prod/runs/gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --start-layer "$START_LAYER" --dates "$PIPELINE_DATES" \
             --gui-python "$DAT535_GUI_PYTHON"
+      - name: Rehearse history publication for branch tests
+        if: github.ref != 'refs/heads/main'
+        env:
+          PIPELINE_RUN_ROOT: ${{ steps.run.outputs.run_root }}
+        run: |
+          mkdir -p "$PIPELINE_RUN_ROOT/publication-check/silver/kol/runs"
+          for attempt in 1 2; do
+            echo "Checking history publication (attempt $attempt/2)"
+            /home/ubuntu/spark-env/bin/python .github/scripts/pipeline_history.py publish \
+              --root "$PIPELINE_RUN_ROOT" --destination "$PIPELINE_RUN_ROOT/publication-check"
+          done
+      - name: Save successful daily inputs alongside history
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || inputs.deploy_gui)
+        env:
+          PIPELINE_RUN_ROOT: ${{ steps.run.outputs.run_root }}
+        run: |
+          /home/ubuntu/spark-env/bin/python .github/scripts/pipeline_history.py publish \
+            --root "$PIPELINE_RUN_ROOT" --destination "$DAT535_SOURCE_ROOT"
       - name: Deploy production GUI
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy_gui)
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || inputs.deploy_gui)
         env:
           DAT535_DATA_ROOT: ${{ steps.run.outputs.run_root }}
           DAT535_GOLD_RUN: ${{ steps.run.outputs.gold_dir }}

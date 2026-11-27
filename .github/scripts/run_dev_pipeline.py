@@ -44,7 +44,8 @@ def selected_dates(value: str, source_root: Path, *, now: datetime | None = None
 
 
 def build_plan(repo: Path, source: Path, root: Path, dates: list[str], start: str,
-               python: str, gui_python: str, *, environment: str = "dev") -> tuple[list[Command], Path, Path]:
+               python: str, gui_python: str, *, environment: str = "dev",
+               history_silver: Path | None = None) -> tuple[list[Command], Path, Path]:
     """Commands use absolute checkout paths and new run paths; no existing-run deletion."""
     if start not in LAYERS:
         raise ValueError(f"Unknown start layer: {start}")
@@ -89,10 +90,12 @@ def build_plan(repo: Path, source: Path, root: Path, dates: list[str], start: st
                 "--zip-slices", str(len(days))]))
     if first <= 2:
         # Keep Silver batches bounded on the 7.8 GiB VM, even for a 53-date selection.
-        for offset in range(0, len(dates), 5):
-            name = f"{environment}-silver-{offset // 5 + 1:03d}"
+        batch_size = 1 if history_silver is not None else 5
+        for offset in range(0, len(dates), batch_size):
+            suffix = dates[offset] if history_silver is not None else f"{offset // 5 + 1:03d}"
+            name = f"{environment}-silver-{suffix}"
             commands.append(Command(name, spark + [str(root / "launch_silver.py"),
-                "--dates", ",".join(dates[offset:offset + 5]),
+                "--dates", ",".join(dates[offset:offset + batch_size]),
                 "--staging-runs-dir", str(staging), "--siri-et-dir", str(siri),
                 "--output-dir", str(silver / name), "--shuffle-partitions", "4"]))
     # Leave memory for the GUI and runner; bound Gold scan and shuffle tasks.
@@ -100,9 +103,18 @@ def build_plan(repo: Path, source: Path, root: Path, dates: list[str], start: st
     gold_spark[gold_spark.index("--driver-memory") + 1] = "1g"
     gold_spark += ["--conf", "spark.sql.files.maxPartitionBytes=16777216",
                    "--conf", "spark.sql.adaptive.coalescePartitions.enabled=false"]
+    gold_dates = ["--dates", *dates]
+    if history_silver is not None:
+        view = root / "silver/kol/history-runs"
+        dates_file = root / "history-dates.json"
+        commands.append(Command("prepare-history", [python, str(repo / ".github/scripts/pipeline_history.py"),
+            "prepare", "--history", str(history_silver), "--new", str(silver),
+            "--view", str(view), "--dates-file", str(dates_file)]))
+        silver = view
+        gold_dates = ["--dates-file", str(dates_file)]
     commands.append(Command("gold", gold_spark + [str(root / "launch_gold.py"),
         "--driver-memory", "1g",
-        "--gold-run-id", gold.name, "--dates", *dates,
+        "--gold-run-id", gold.name, *gold_dates,
         "--silver-runs-dir", str(silver), "--gold-runs-dir", str(gold.parent)]))
     commands.append(Command("gui-smoke", [gui_python, str(repo / ".github/scripts/smoke_dev_gui.py")]))
     return commands, gold, silver
@@ -153,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--start-layer", choices=LAYERS, default="bronze")
     parser.add_argument("--environment", choices=("dev", "prod"), default="dev")
+    parser.add_argument("--history-silver-runs", type=Path)
     parser.add_argument("--dates", default="yesterday")
     parser.add_argument("--gui-python", default="/home/ubuntu/dat535-gui-env/bin/python")
     parser.add_argument("--dry-run", action="store_true")
@@ -160,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     source, root = args.source_root.resolve(), args.run_root.resolve()
     dates = selected_dates(args.dates, source)
     commands, gold, silver = build_plan(REPO_ROOT, source, root, dates, args.start_layer,
-                                        sys.executable, args.gui_python, environment=args.environment)
+                                        sys.executable, args.gui_python, environment=args.environment,
+                                        history_silver=args.history_silver_runs)
     if args.dry_run:
         print(json.dumps({"dates": dates, "commands": [asdict(c) for c in commands]}, indent=2))
         return 0

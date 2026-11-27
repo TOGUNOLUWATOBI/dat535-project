@@ -113,13 +113,20 @@ because each month is only 4–5 sampled days.
 
 ## Deployment
 
-`.github/workflows/prod.yml` runs after every push to `main`, including merged
-pull requests, using that exact commit. It replaces the GUI-only workflow and
+`.github/workflows/prod.yml` runs daily at **07:15 UTC** and after every push to
+`main`, including merged pull requests, using that exact commit. It replaces the GUI-only workflow and
 runs **Bronze NeTEx + SIRI ET → Staging → Silver → Gold → all GUI page checks**
-for **yesterday in Europe/Oslo**. Each build writes new outputs under
+for **yesterday in Europe/Oslo**. Only the new day's Bronze, Staging and Silver
+are processed; Gold includes the existing Silver history plus that day. Each build writes new outputs under
 `/srv/dat535/data/prod/runs/gh-<run-id>-<attempt>/`, with Gold run ID `prod-gold`.
 After all checks pass, it restarts the production GUI on **8501** against those
-outputs and checks that the port answers. Failed builds keep their logs and
+outputs and checks that the port answers. After checks pass, new Bronze files
+and manifest records are added to `/srv/dat535/data/bronze/`, new Silver days
+are registered under `/srv/dat535/data/silver/kol/runs/`, and the cumulative
+Gold run is registered under `/srv/dat535/data/gold/kol/runs/`. Staging outputs
+remain in the dated run directory, recorded in `metadata/production_runs/`.
+Existing dates are retained; reruns reuse existing Silver authority and refuse
+to replace a historical Bronze file with different contents. Failed builds keep their logs and
 leave the running GUI alone.
 Pushes to the development branch validate the production workflow without
 starting a production build or deployment.
@@ -130,8 +137,9 @@ test the complete pipeline without changing the live GUI. Development and
 production share a processing concurrency group to avoid competing Spark builds
 on the VM, and use separate checkout and data directories for each run. The
 running GUI keeps its original checkout while the next build is tested. Both workflows keep
-logs and elapsed times as seven-day artifacts. This builds a previous-day
-snapshot; it does not rebuild the historical 53-date dashboard.
+logs and elapsed times as seven-day artifacts. Historical upstream files are
+reused; cumulative Gold is rebuilt from all authoritative Silver dates, so its
+runtime grows with history.
 Gold uses a 1 GB driver heap with 16 MiB scan partitions and four shuffle
 partitions to leave memory for the running GUI and Actions runner.
 
@@ -176,8 +184,8 @@ those credentials. The development workflow uses the existing VM credential file
 `GOOGLE_APPLICATION_CREDENTIALS` can override this path. The runner user must be
 able to read the file. Credential contents stay on the VM.
 
-Each scheduled run is a **previous-day snapshot**, not a cumulative rebuild of
-the historical 53 dates. Existing Gold calculations and gates are unchanged,
+Each development run is an isolated **previous-day snapshot**. Production keeps
+the historical dates and includes the new day in its Gold build. Existing Gold calculations and gates are unchanged,
 including the currently fixed 2026 season windows; extending seasonal analytics
 to December and subsequent years requires a separate Gold-policy update.
 
