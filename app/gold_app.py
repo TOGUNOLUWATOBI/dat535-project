@@ -198,8 +198,6 @@ with st.sidebar.expander("ℹ️ What do the numbers mean?"):
         "- **Worst 5%**: 95% of stops are better than this.\n"
         "- **—** means there was nothing to measure, not zero.\n"
         "- Bus and boat are always shown separately.")
-if st.sidebar.button("🔄 Reload data"):
-    st.cache_data.clear()
 
 in_period = (network.period_type == period_type) & (network.period_label == period)
 period_rows = network[in_period & (network.transport_mode == mode)]
