@@ -1,4 +1,4 @@
-"""Run development layers in a fresh directory; reuse upstream published inputs read-only.
+"""Run pipeline layers in a fresh directory; reuse upstream published inputs read-only.
 
 Use --dry-run to inspect the exact commands without starting Spark or creating outputs.
 The production batch wrappers are deliberately avoided because they remove existing runs.
@@ -17,8 +17,6 @@ import sys
 import time
 from zoneinfo import ZoneInfo
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 LAYERS = ("bronze", "staging", "silver", "gold")
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -46,10 +44,12 @@ def selected_dates(value: str, source_root: Path, *, now: datetime | None = None
 
 
 def build_plan(repo: Path, source: Path, root: Path, dates: list[str], start: str,
-               python: str, gui_python: str) -> tuple[list[Command], Path, Path]:
+               python: str, gui_python: str, *, environment: str = "dev") -> tuple[list[Command], Path, Path]:
     """Commands use absolute checkout paths and new run paths; no existing-run deletion."""
     if start not in LAYERS:
         raise ValueError(f"Unknown start layer: {start}")
+    if environment not in ("dev", "prod"):
+        raise ValueError(f"Unknown environment: {environment}")
     if not dates:
         raise ValueError("No dates selected")
     source, root, repo = source.resolve(), root.resolve(), repo.resolve()
@@ -60,7 +60,7 @@ def build_plan(repo: Path, source: Path, root: Path, dates: list[str], start: st
     staging = (root if first <= 1 else source) / "staging/netex/kol/runs"
     silver = (root if first <= 2 else source) / "silver/kol/runs"
     siri = (root if first == 0 else source) / "bronze/siri_et/kol"
-    gold = root / "gold/kol/runs/dev-gold"
+    gold = root / f"gold/kol/runs/{environment}-gold"
     commands: list[Command] = []
     spark_submit = str(Path(python).parent / "spark-submit")
     spark = [spark_submit, "--master", "local[1]", "--driver-memory", "2g",
@@ -90,13 +90,16 @@ def build_plan(repo: Path, source: Path, root: Path, dates: list[str], start: st
     if first <= 2:
         # Keep Silver batches bounded on the 7.8 GiB VM, even for a 53-date selection.
         for offset in range(0, len(dates), 5):
-            name = f"dev-silver-{offset // 5 + 1:03d}"
+            name = f"{environment}-silver-{offset // 5 + 1:03d}"
             commands.append(Command(name, spark + [str(root / "launch_silver.py"),
                 "--dates", ",".join(dates[offset:offset + 5]),
                 "--staging-runs-dir", str(staging), "--siri-et-dir", str(siri),
                 "--output-dir", str(silver / name), "--shuffle-partitions", "4"]))
-    commands.append(Command("gold", spark + [str(root / "launch_gold.py"),
-        "--gold-run-id", "dev-gold", "--dates", *dates,
+    # Bound Gold scan tasks and retain its four shuffle partitions on the small VM.
+    gold_spark = spark + ["--conf", "spark.sql.files.maxPartitionBytes=16777216",
+                          "--conf", "spark.sql.adaptive.coalescePartitions.enabled=false"]
+    commands.append(Command("gold", gold_spark + [str(root / "launch_gold.py"),
+        "--gold-run-id", gold.name, "--dates", *dates,
         "--silver-runs-dir", str(silver), "--gold-runs-dir", str(gold.parent)]))
     commands.append(Command("gui-smoke", [gui_python, str(repo / ".github/scripts/smoke_dev_gui.py")]))
     return commands, gold, silver
@@ -146,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-root", type=Path, default=Path("/srv/dat535/data"))
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--start-layer", choices=LAYERS, default="bronze")
+    parser.add_argument("--environment", choices=("dev", "prod"), default="dev")
     parser.add_argument("--dates", default="yesterday")
     parser.add_argument("--gui-python", default="/home/ubuntu/dat535-gui-env/bin/python")
     parser.add_argument("--dry-run", action="store_true")
@@ -153,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     source, root = args.source_root.resolve(), args.run_root.resolve()
     dates = selected_dates(args.dates, source)
     commands, gold, silver = build_plan(REPO_ROOT, source, root, dates, args.start_layer,
-                                        sys.executable, args.gui_python)
+                                        sys.executable, args.gui_python, environment=args.environment)
     if args.dry_run:
         print(json.dumps({"dates": dates, "commands": [asdict(c) for c in commands]}, indent=2))
         return 0

@@ -113,12 +113,24 @@ because each month is only 4–5 sampled days.
 
 ## Deployment
 
-`.github/workflows/gui.yml` deploys the GUI on the school server's self-hosted
-runner (label `dat535`). After a push to `main` that changes `src/app/`,
-`tests/test_app.py` or `requirements.txt` (or when started by hand from the
-Actions tab), it tests every GUI page against the Gold data, restarts the GUI
-with `src/app/run_gui.sh --restart` and checks that port 8501 answers. The
-runner service must be running on the server:
+`.github/workflows/prod.yml` runs after every push to `main`, including merged
+pull requests, using that exact commit. It replaces the GUI-only workflow and
+runs **Bronze NeTEx + SIRI ET → Staging → Silver → Gold → all GUI page checks**
+for **yesterday in Europe/Oslo**. Each build writes new outputs under
+`/srv/dat535/data/prod/runs/gh-<run-id>-<attempt>/`, with Gold run ID `prod-gold`.
+After all checks pass, it restarts the production GUI on **8501** against those
+outputs and checks that the port answers. Failed builds keep their logs and
+leave the running GUI alone.
+
+Manual runs can select dates and a starting layer. Production deployment is
+allowed only from `main` and must be selected for manual runs. Branch runs can
+test the complete pipeline without changing the live GUI. Development and
+production share a processing concurrency group to avoid competing Spark builds
+on the VM, and use separate checkout and data directories. Both workflows keep
+logs and elapsed times as seven-day artifacts. This builds a previous-day
+snapshot; it does not rebuild the historical 53-date dashboard.
+
+The `dat535` runner service must be running on the server:
 `sudo systemctl start actions.runner.TOGUNOLUWATOBI-dat535-project.dat535-spark.service`.
 
 ### Daily development workflow

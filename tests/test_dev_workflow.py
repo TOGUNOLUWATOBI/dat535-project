@@ -83,6 +83,21 @@ class DevWorkflowTests(unittest.TestCase):
                     self.assertEqual(c.argv[c.argv.index("--staging-runs-dir") + 1],
                                      "/srv/dat535/data/staging/netex/kol/runs")
 
+    def test_production_uses_its_own_outputs_and_matching_gold_identifier(self):
+        root = Path("/srv/dat535/data/prod/runs/test")
+        commands, gold, silver = runner.build_plan(
+            ROOT, Path("/srv/dat535/data"), root, ["2026-01-01"], "bronze",
+            "/home/ubuntu/spark-env/bin/python", "/home/ubuntu/dat535-gui-env/bin/python",
+            environment="prod")
+        self.assertTrue(gold.is_relative_to(root))
+        self.assertTrue(silver.is_relative_to(root))
+        self.assertEqual(gold.name, "prod-gold")
+        batch = next(c for c in commands if c.name.startswith("prod-silver-"))
+        self.assertTrue(Path(batch.argv[batch.argv.index("--output-dir") + 1]).is_relative_to(silver))
+        gold_command = next(c for c in commands if c.name == "gold")
+        self.assertEqual(gold_command.argv[gold_command.argv.index("--gold-run-id") + 1], gold.name)
+        self.assertFalse(any("/dev/" in arg for c in commands for arg in c.argv))
+
     def test_published_directories_cannot_be_used_as_output_roots(self):
         for root in ("/srv/dat535/data", "/srv/dat535", "/srv/dat535/data/bronze/test",
                      "/srv/dat535/data/silver/kol/runs/test", "/srv/dat535/data/gold/kol/runs/test"):

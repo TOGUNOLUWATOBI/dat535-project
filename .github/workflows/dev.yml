@@ -75,6 +75,9 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, dat535]
     timeout-minutes: 360
+    concurrency:
+      group: dat535-processing
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: dev-worktree
@@ -97,6 +100,7 @@ jobs:
           /home/ubuntu/spark-env/bin/python -c 'import pyspark, pyarrow'
           "$DAT535_GUI_PYTHON" -c 'import streamlit, pandas, pyarrow, altair'
           test -x "$JAVA_HOME/bin/java"
+          free -m
           if [[ "$START_LAYER" == bronze ]]; then
             test -r "$GOOGLE_APPLICATION_CREDENTIALS"
             /home/ubuntu/spark-env/bin/python -c 'import google.auth; from google.cloud import bigquery; google.auth.default()'
