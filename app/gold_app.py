@@ -176,19 +176,16 @@ st.sidebar.caption(f"{len(meta['published_operating_dates'])} sampled days in 20
 page = st.sidebar.radio("Page", ["📊 Overview", "🚏 Lines", "📍 Stops", "🩺 Data quality"],
                         label_visibility="collapsed")
 st.sidebar.divider()
-period_type = st.sidebar.radio("Time period", ["season", "month"], horizontal=True,
-                               format_func={"season": "By season", "month": "By month"}.get)
-labels = list(SEASON_WINDOWS) if period_type == "season" else sorted(
-    network.loc[network.period_type == "month", "period_label"].unique())
-period = st.sidebar.selectbox("Which one", labels, format_func=period_name)
+months = sorted(network.loc[network.period_type == "month", "period_label"].unique())
+period = st.sidebar.selectbox("Time period", [*SEASON_WINDOWS, *months], format_func=period_name,
+                              help="Seasons (9–15 sampled days) give steadier numbers than months (4–5 days).")
+period_type = "season" if period in SEASON_WINDOWS else "month"
+labels = list(SEASON_WINDOWS) if period_type == "season" else months
 mode = st.sidebar.radio("Transport", ["bus", "water"], format_func=MODES.get, horizontal=True)
 event = st.sidebar.radio("Measure at", list(EVENTS), format_func=EVENTS.get, horizontal=True,
                          help="Departures: leaving early counts against punctuality. "
                               "Arrivals: what passengers experience at their destination.")
-baseline = st.sidebar.radio("Compare actual times against", list(BASELINES), format_func=BASELINES.get,
-                            help="Live schedule: the time the operator was aiming for that day (includes "
-                                 "real-time changes). Printed timetable: the published plan.")
-other = next(b for b in BASELINES if b != baseline)
+baseline, other = "et_aimed", "netex_planned"  # rank and chart against the live schedule; compare in tables
 with st.sidebar.expander("ℹ️ What do the numbers mean?"):
     st.markdown(
         f"- **On time**: departs 0–{policy['departure_within_window_max_sec'] / 60:.0f} min late "
@@ -197,6 +194,9 @@ with st.sidebar.expander("ℹ️ What do the numbers mean?"):
         "- **Typical delay**: the median: half of stops are better, half worse.\n"
         "- **Worst 5%**: 95% of stops are better than this.\n"
         "- **—** means there was nothing to measure, not zero.\n"
+        "- Actual times are compared with the **live schedule** (SIRI: the time aimed for that day, "
+        "including same-day changes). The Overview and a line's detail also compare with the **printed "
+        "timetable** (NeTEx).\n"
         "- Bus and boat are always shown separately.")
 
 in_period = (network.period_type == period_type) & (network.period_label == period)
@@ -207,7 +207,7 @@ if pick(period_rows).empty:
     st.stop()
 start, end = period_rows.period_start_date.min(), period_rows.period_end_date.max()
 dates_in_period = [d for d in meta["published_operating_dates"] if str(start) <= d <= str(end)]
-scope = f"{MODES[mode]} · {EVENTS[event].lower()} · {period_name(period)} · vs {BASELINES[baseline]}"
+scope = f"{MODES[mode]} · {EVENTS[event].lower()} · {period_name(period)}"
 
 
 # ---------------------------------------------------------------- pages

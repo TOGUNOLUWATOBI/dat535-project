@@ -187,9 +187,11 @@ stores quay IDs.
 forwarding to `http://localhost:8501`. No login. Override `DAT535_GOLD_RUN`,
 `DAT535_SILVER_RUNS`, `DAT535_GUI_PORT` and `DAT535_GUI_PYTHON` as needed.
 
-The sidebar filters apply to every page: season or month, bus or boat (never
-blended), departures or arrivals, and the baseline: **live schedule** (`et_aimed`,
-SIRI ET) or **printed timetable** (`netex_planned`, NeTEx).
+The sidebar has three filters that apply to every page: one time period (a
+season or a month), bus or boat (never blended), and departures or arrivals.
+Actual times are measured against the **live schedule** (`et_aimed`, SIRI ET);
+the Overview and each line's detail also show the **printed timetable**
+(`netex_planned`, NeTEx) side by side, with how often the two agree.
 
 | Page | Answers |
 | --- | --- |

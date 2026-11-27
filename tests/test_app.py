@@ -12,16 +12,17 @@ PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🩺 Data quality"]
 @unittest.skipUnless(importlib.util.find_spec("streamlit") and (GOLD / "gold_manifest.json").is_file(),
                      "Needs Streamlit and the Gold run")
 class GoldAppTests(unittest.TestCase):
-    def open(self, page, period_type="season", mode="bus", event="departure", baseline="et_aimed"):
+    def open(self, page, period="winter-2026", mode="bus", event="departure"):
         from streamlit.testing.v1 import AppTest
         app = AppTest.from_file("app/gold_app.py", default_timeout=180).run()
-        for index, value in enumerate([page, period_type, mode, event, baseline]):
+        for index, value in enumerate([page, mode, event]):
             app.sidebar.radio[index].set_value(value)
+        app.sidebar.selectbox[0].set_value(period)
         return app.run()
 
     def test_every_page_and_filter_combination_renders(self):
         for page in PAGES:
-            for filters in [("season", "bus", "departure", "et_aimed"), ("month", "water", "arrival", "netex_planned")]:
+            for filters in [("winter-2026", "bus", "departure"), ("2026-03", "water", "arrival")]:
                 with self.subTest(page=page, filters=filters):
                     self.assertEqual([e.value for e in self.open(page, *filters).exception], [])
 
