@@ -1,7 +1,7 @@
 """Kolumbus punctuality explorer over the Gold run (read-only, no Spark).
 
-Pages: Overview, Lines, Stops, Journeys, Data quality. Small Gold tables are read whole
-and cached; the two large ones (stops, journeys) are read with PyArrow filter pushdown.
+Pages: Overview, Lines, Stops, Data quality. Small Gold tables are read whole and cached;
+the large stop table is read with PyArrow filter pushdown.
 Stop names and the stops each line serves come from Silver, since Gold stores only quay IDs.
 
 Start with:  bash scripts/run_gui.sh
@@ -44,8 +44,6 @@ LABELS = {
     "weekday_date_counts": "Weekdays", "period_name": "Period", "reason": "Reason", "event_count": "Stops excluded",
     "planned_call_matching_coverage": "Timetable stops matched", "reported_call_matching_coverage": "Live reports matched",
     "siri_file_available": "Live feed present", "silver_gate_status": "Quality check",
-    "pattern": "What happened", "journey_count": "Trips", "median_change_sec": "Typical change en route",
-    "planned_service_status": "Timetable status", "journey_cancellation_state": "Cancellation status",
 }
 REASONS = {  # Gold exclusion codes -> why a stop event could not be measured
     "missing_recorded_departure": "Vehicle never reported a departure time",
@@ -175,7 +173,7 @@ network = table("period_network_punctuality")
 
 st.sidebar.title("🚌 Kolumbus punctuality")
 st.sidebar.caption(f"{len(meta['published_operating_dates'])} sampled days in 2026")
-page = st.sidebar.radio("Page", ["📊 Overview", "🚏 Lines", "📍 Stops", "🔁 Journeys", "🩺 Data quality"],
+page = st.sidebar.radio("Page", ["📊 Overview", "🚏 Lines", "📍 Stops", "🩺 Data quality"],
                         label_visibility="collapsed")
 st.sidebar.divider()
 period_type = st.sidebar.radio("Time period", ["season", "month"], horizontal=True,
@@ -405,53 +403,6 @@ def stops():
                            "worst_day_p95_delay_sec", "eligible_event_count", "quay_id"], height=380)
 
 
-def journeys():
-    st.title("Do trips start late, or lose time on the way?")
-    st.caption("For each trip on one line and day: the delay leaving the first stop vs the delay arriving at the "
-               "last stop. Trips above the diagonal lost time en route.")
-    service = table("period_line_service")
-    service = service[(service.transport_mode == mode) & service.line_id.notna()].drop_duplicates("line_id")
-    names = dict(zip(service.line_id, service.line_public_code.fillna("?") + " — " + service.line_name.fillna("")))
-    c = st.columns(2)
-    line = c[0].selectbox("Line", sorted(names, key=names.get), format_func=names.get)
-    day = pd.Timestamp(c[1].selectbox("Day", dates_in_period)).date()
-    with st.spinner("Reading trips …"):
-        frame = table("journey_performance", filters=[
-            [("operating_date", "==", day), ("planned_line_id", "==", line)],
-            [("operating_date", "==", day), ("reported_line_id", "==", line)]])
-    p = "et" if baseline == "et_aimed" else "netex"
-    origin, terminal, change = (f"{p}_origin_departure_delay_sec", f"{p}_terminal_arrival_delay_sec",
-                                f"{p}_delay_change_sec")
-    paired = frame.dropna(subset=[origin, terminal])
-    st.caption(f"{len(frame):,} trips on this line and day; {len(paired):,} with both first and last stop measured.")
-    if paired.empty:
-        st.warning("**This can't be shown yet: the Gold data has no trip with both ends measured.** "
-                   "In this Gold run, live (SIRI) trips were not linked to timetable trips, so no trip has a delay "
-                   "at its first and last stop. The other pages use stop-level matching and are not affected.")
-        st.markdown("What the trips on this line and day do contain:")
-        show(frame.groupby(["planned_service_status", "journey_cancellation_state"], dropna=False).size()
-             .rename("journey_count").reset_index(), ["planned_service_status", "journey_cancellation_state",
-                                                      "journey_count"])
-        return
-    late = policy["departure_within_window_max_sec"]
-    paired["pattern"] = "On time all the way"
-    paired.loc[paired[change] > late, "pattern"] = "Lost time en route"
-    paired.loc[paired[origin] > late, "pattern"] = "Started late"
-    paired.loc[(paired[origin] > late) & (paired[change] < -60), "pattern"] = "Started late, caught up"
-    paired = paired.assign(start_min=paired[origin] / 60, end_min=paired[terminal] / 60)
-    diagonal = alt.Chart(pd.DataFrame({"v": [paired.start_min.min(), paired.start_min.max()]})).mark_line(
-        strokeDash=[4, 4], color="gray").encode(x="v", y="v")
-    chart(diagonal + alt.Chart(paired).mark_circle(size=60, opacity=0.7).encode(
-        x=alt.X("start_min", title="Minutes late leaving first stop"),
-        y=alt.Y("end_min", title="Minutes late at last stop"),
-        color=alt.Color("pattern", title=None, legend=alt.Legend(orient="bottom")),
-        tooltip=["service_journey_id", "pattern", alt.Tooltip("start_min", format=".1f"),
-                 alt.Tooltip("end_min", format=".1f")]).properties(height=380))
-    show(paired.groupby("pattern").agg(journey_count=("journey_key", "size"),
-                                       median_change_sec=(change, "median")).reset_index(),
-         ["pattern", "journey_count", "median_change_sec"])
-
-
 def quality():
     st.title("Can the numbers be trusted?")
     st.caption("Check here when a number looks odd: was the live feed missing, or were many stops not measurable?")
@@ -493,8 +444,7 @@ def quality():
               "planned_call_matching_coverage", "reported_call_matching_coverage"], height=320)
 
 
-{"📊 Overview": overview, "🚏 Lines": lines, "📍 Stops": stops, "🔁 Journeys": journeys,
- "🩺 Data quality": quality}[page]()
+{"📊 Overview": overview, "🚏 Lines": lines, "📍 Stops": stops, "🩺 Data quality": quality}[page]()
 st.divider()
 st.caption(f"Read-only view of Gold run `{GOLD.name}` · Kolumbus (KOL) · {len(meta['published_operating_dates'])} "
            f"sampled days, {meta['published_operating_dates'][0]} → {meta['published_operating_dates'][-1]}.")

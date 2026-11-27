@@ -178,8 +178,7 @@ checkout or with less than 2 GiB free. On the school server the service is
 A read-only Streamlit app, `app/gold_app.py`, over the punctuality Gold run
 `/srv/dat535/data/gold/kol/runs/gold-kol-53d-2026-v2` (Kolumbus, 53 sampled
 days, 2026-01-01 → 2026-11-19). It never starts Spark: small tables are read
-with pandas, the two large ones (`daily_stop_punctuality`, `journey_performance`)
-with PyArrow filter pushdown. Stop names and the stops each line serves are read
+with pandas, the large `daily_stop_punctuality` with PyArrow filter pushdown. Stop names and the stops each line serves are read
 once from Silver (`journey_pattern_stops`, `netex_stop_calls`), since Gold only
 stores quay IDs.
 
@@ -197,7 +196,6 @@ SIRI ET) or **printed timetable** (`netex_planned`, NeTEx).
 | 📊 Overview | How punctual is Kolumbus? On-time, late, very late, typical and worst-5% delay (with the difference to the other baseline), trips tracked live and cancelled; departures × arrivals × baselines; how often the live schedule matched the timetable; the year by season/month; bus vs boat; day-by-day charts |
 | 🚏 Lines | Which lines perform worst or best? Searchable ranking by late rate, worst-5% delay, cancellations or timetable match, then one line's departures/arrivals and daily trend |
 | 📍 Stops | Where do delays build up? Named quays ranked by late rate, for a period or one day, optionally only those on one line |
-| 🔁 Journeys | Do trips start late or lose time on the way? First-stop vs last-stop delay for a line and day |
 | 🩺 Data quality | Can the numbers be trusted? Quality gate, live-feed availability, matching coverage and why stops were not measurable |
 
 Every period number is shown with its sample (days, date range, weekdays),
@@ -209,6 +207,7 @@ because each month is 4–5 sampled days. Rates with nothing to measure are
 - Live (SIRI) trips are not linked to timetable trips at trip level, so
   `journey_performance` has no first/last-stop delays and
   `scheduled_with_et_journey_count` is 0. Stop-level punctuality is unaffected.
+  The origin-to-terminal journey page was left out until this is fixed.
 - 2,586 quay-days differ from the timetable by more than an hour (down to
   −7.4 h), most likely a date/time matching issue. It pulls the *average*
   NeTEx delay and disagreement far below zero; the medians are unaffected.

@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 
 GOLD = Path(os.environ.get("DAT535_GOLD_RUN", "/srv/dat535/data/gold/kol/runs/gold-kol-53d-2026-v2"))
-PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🔁 Journeys", "🩺 Data quality"]
+PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🩺 Data quality"]
 
 
 @unittest.skipUnless(importlib.util.find_spec("streamlit") and (GOLD / "gold_manifest.json").is_file(),
