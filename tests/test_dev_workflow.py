@@ -64,6 +64,9 @@ class DevWorkflowTests(unittest.TestCase):
         batches = [c for c in commands if c.name.startswith("dev-silver-")]
         self.assertEqual([len(c.argv[c.argv.index("--dates") + 1].split(",")) for c in batches], [5, 1])
         self.assertEqual([c.name for c in commands[-2:]], ["gold", "gui-smoke"])
+        gold_command = commands[-2].argv
+        self.assertEqual([gold_command[i + 1] for i, arg in enumerate(gold_command)
+                          if arg == "--driver-memory"], ["1g", "1g"])
         self.assertTrue(gold.is_relative_to(Path("/srv/dat535/data/dev")))
         self.assertTrue(silver.is_relative_to(Path("/srv/dat535/data/dev")))
         self.assertFalse(any("--force" in c.argv or "rm" in c.argv for c in commands))

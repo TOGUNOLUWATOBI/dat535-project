@@ -95,10 +95,13 @@ def build_plan(repo: Path, source: Path, root: Path, dates: list[str], start: st
                 "--dates", ",".join(dates[offset:offset + 5]),
                 "--staging-runs-dir", str(staging), "--siri-et-dir", str(siri),
                 "--output-dir", str(silver / name), "--shuffle-partitions", "4"]))
-    # Bound Gold scan tasks and retain its four shuffle partitions on the small VM.
-    gold_spark = spark + ["--conf", "spark.sql.files.maxPartitionBytes=16777216",
-                          "--conf", "spark.sql.adaptive.coalescePartitions.enabled=false"]
+    # Leave memory for the GUI and runner; bound Gold scan and shuffle tasks.
+    gold_spark = list(spark)
+    gold_spark[gold_spark.index("--driver-memory") + 1] = "1g"
+    gold_spark += ["--conf", "spark.sql.files.maxPartitionBytes=16777216",
+                   "--conf", "spark.sql.adaptive.coalescePartitions.enabled=false"]
     commands.append(Command("gold", gold_spark + [str(root / "launch_gold.py"),
+        "--driver-memory", "1g",
         "--gold-run-id", gold.name, "--dates", *dates,
         "--silver-runs-dir", str(silver), "--gold-runs-dir", str(gold.parent)]))
     commands.append(Command("gui-smoke", [gui_python, str(repo / ".github/scripts/smoke_dev_gui.py")]))

@@ -132,6 +132,8 @@ on the VM, and use separate checkout and data directories for each run. The
 running GUI keeps its original checkout while the next build is tested. Both workflows keep
 logs and elapsed times as seven-day artifacts. This builds a previous-day
 snapshot; it does not rebuild the historical 53-date dashboard.
+Gold uses a 1 GB driver heap with 16 MiB scan partitions and four shuffle
+partitions to leave memory for the running GUI and Actions runner.
 
 The `dat535` runner service must be running on the server:
 `sudo systemctl start actions.runner.TOGUNOLUWATOBI-dat535-project.dat535-spark.service`.
