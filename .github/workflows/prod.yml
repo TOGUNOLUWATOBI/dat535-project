@@ -2,7 +2,8 @@ name: Prod workflow
 
 on:
   push:
-    branches: [main]
+    # Development pushes validate this workflow; main pushes also run and deploy.
+    branches: [main, ft/further-refactoring-and-cleanup]
   workflow_dispatch:
     inputs:
       start_layer:
@@ -59,6 +60,7 @@ jobs:
 
   pipeline:
     needs: validate
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, dat535]
     timeout-minutes: 360
     concurrency:

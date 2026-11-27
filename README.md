@@ -121,6 +121,8 @@ for **yesterday in Europe/Oslo**. Each build writes new outputs under
 After all checks pass, it restarts the production GUI on **8501** against those
 outputs and checks that the port answers. Failed builds keep their logs and
 leave the running GUI alone.
+Pushes to the development branch validate the production workflow without
+starting a production build or deployment.
 
 Manual runs can select dates and a starting layer. Production deployment is
 allowed only from `main` and must be selected for manual runs. Branch runs can
