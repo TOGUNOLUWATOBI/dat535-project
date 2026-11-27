@@ -128,7 +128,8 @@ Manual runs can select dates and a starting layer. Production deployment is
 allowed only from `main` and must be selected for manual runs. Branch runs can
 test the complete pipeline without changing the live GUI. Development and
 production share a processing concurrency group to avoid competing Spark builds
-on the VM, and use separate checkout and data directories. Both workflows keep
+on the VM, and use separate checkout and data directories for each run. The
+running GUI keeps its original checkout while the next build is tested. Both workflows keep
 logs and elapsed times as seven-day artifacts. This builds a previous-day
 snapshot; it does not rebuild the historical 53-date dashboard.
 
@@ -158,7 +159,8 @@ The `dat535` runner service must be running on the server:
 - Layer logs and elapsed times are attached as seven-day GitHub artifacts and
   recorded in the run's `metadata/run.json`. Failed runs retain their diagnostics;
   a failed build does not deploy its GUI. Data directories remain on the VM and
-  need to be included in the project's disk-retention policy.
+  need to be included in the project's disk-retention policy, together with the
+  per-run checkout directories on the runner.
 
 GitHub schedules and the manual Run workflow button require the workflow to be
 registered on the **default branch**. Add the workflow there after review; it

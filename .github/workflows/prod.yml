@@ -68,7 +68,7 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: prod-worktree
+        working-directory: prod-worktree-${{ github.run_id }}-${{ github.run_attempt }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       DAT535_SOURCE_ROOT: /srv/dat535/data
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
-          path: prod-worktree
+          path: prod-worktree-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Check installed processing and GUI environments
         env:
           START_LAYER: ${{ inputs.start_layer || 'bronze' }}
