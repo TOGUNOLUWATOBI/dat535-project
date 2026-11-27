@@ -1,0 +1,145 @@
+name: Dev workflow
+
+on:
+  schedule:
+    # 07:15 UTC: 08:15 in Oslo in winter, 09:15 in summer.
+    - cron: '15 7 * * *'
+  push:
+    branches: [ft/further-refactoring-and-cleanup]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/**'
+  workflow_dispatch:
+    inputs:
+      start_layer:
+        description: Start here and run all downstream layers, including GUI checks
+        type: choice
+        options: [bronze, staging, silver, gold]
+        default: bronze
+      dates:
+        description: yesterday (Oslo), comma-separated dates, or manifest for all downloaded dates
+        type: string
+        default: yesterday
+        required: true
+      deploy_gui:
+        description: Start the development GUI on port 8502 after its smoke checks
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dat535-dev
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      revision: ${{ steps.revision.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || 'ft/further-refactoring-and-cleanup' }}
+      - name: Record the validated revision
+        id: revision
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check Python and shell syntax
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for root in ('src', '.github/scripts'):
+              for path in Path(root).rglob('*.py'):
+                  ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+          PY
+          find src .github/scripts -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+      - name: Test development orchestration
+        run: python -B -m unittest tests.test_dev_workflow -v
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+      - name: Validate workflow syntax and expressions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/dev.yml
+
+  pipeline:
+    needs: validate
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, dat535]
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: dev-worktree
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      DAT535_SOURCE_ROOT: /srv/dat535/data
+      DAT535_GUI_PYTHON: /home/ubuntu/dat535-gui-env/bin/python
+      JAVA_HOME: /home/ubuntu/dat535-runtime/java17/jdk-17.0.21+9-jre
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          path: dev-worktree
+      - name: Check installed processing and GUI environments
+        env:
+          START_LAYER: ${{ inputs.start_layer || 'bronze' }}
+        run: |
+          /home/ubuntu/spark-env/bin/python -c 'import pyspark, pyarrow'
+          "$DAT535_GUI_PYTHON" -c 'import streamlit, pandas, pyarrow, altair'
+          test -x "$JAVA_HOME/bin/java"
+          if [[ "$START_LAYER" == bronze ]]; then
+            /home/ubuntu/spark-env/bin/python -c 'import google.auth; from google.cloud import bigquery; google.auth.default()'
+          fi
+      - name: Run selected layers and GUI smoke checks
+        id: run
+        env:
+          DEV_DATES: ${{ inputs.dates || 'yesterday' }}
+          START_LAYER: ${{ inputs.start_layer || 'bronze' }}
+        run: |
+          /home/ubuntu/spark-env/bin/python .github/scripts/run_dev_pipeline.py \
+            --source-root "$DAT535_SOURCE_ROOT" \
+            --run-root "$DAT535_SOURCE_ROOT/dev/runs/gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --start-layer "$START_LAYER" --dates "$DEV_DATES" \
+            --gui-python "$DAT535_GUI_PYTHON"
+      - name: Start development GUI
+        if: github.event_name == 'schedule' || inputs.deploy_gui
+        env:
+          DAT535_DATA_ROOT: ${{ steps.run.outputs.run_root }}
+          DAT535_GOLD_RUN: ${{ steps.run.outputs.gold_dir }}
+          DAT535_SILVER_RUNS: ${{ steps.run.outputs.silver_runs_dir }}
+          DAT535_GUI_PORT: '8502'
+        run: |
+          bash src/app/run_gui.sh --restart
+          for attempt in $(seq 1 15); do
+            curl -sf -o /dev/null http://localhost:8502/ && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: Attach run summary
+        if: always() && steps.run.outputs.run_root != ''
+        env:
+          DEV_RUN_ROOT: ${{ steps.run.outputs.run_root }}
+        run: |
+          echo "### Development pipeline" >> "$GITHUB_STEP_SUMMARY"
+          echo "Output directory: \`$DEV_RUN_ROOT\`" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$DEV_RUN_ROOT/metadata/run.json" ]]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat "$DEV_RUN_ROOT/metadata/run.json" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.run.outputs.run_root != ''
+        with:
+          name: dev-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run.outputs.run_root }}/metadata/
+          retention-days: 7
+          if-no-files-found: warn

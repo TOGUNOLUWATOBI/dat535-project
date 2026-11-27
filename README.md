@@ -121,6 +121,52 @@ with `src/app/run_gui.sh --restart` and checks that port 8501 answers. The
 runner service must be running on the server:
 `sudo systemctl start actions.runner.TOGUNOLUWATOBI-dat535-project.dat535-spark.service`.
 
+### Daily development workflow
+
+`.github/workflows/dev.yml` is a separate **Dev workflow** for
+`ft/further-refactoring-and-cleanup`:
+
+- Every day at **07:15 UTC** (08:15 Oslo in winter, 09:15 in summer), it runs
+  **Bronze NeTEx + SIRI ET → Staging → Silver → Gold → GUI smoke checks**.
+  The default date is **yesterday in Europe/Oslo**, calculated when the run starts.
+- Branch pushes run syntax, workflow and orchestration checks. They do not
+  trigger another cloud download or full Spark build.
+- Manual runs can select `bronze`, `staging`, `silver` or `gold` as the starting
+  layer. All downstream layers still run. Supply `yesterday`, comma-separated
+  dates, or `manifest` for the existing Bronze manifest's downloaded dates.
+- Each execution writes to a fresh
+  `/srv/dat535/data/dev/runs/gh-<run-id>-<attempt>/`. Starting below Bronze reads
+  the existing published upstream inputs; it does not overwrite them. Silver
+  backfills are split into at most five dates per batch.
+- Scheduled successes deploy the development GUI on **8502**. Manual runs can
+  opt into deployment. The main GUI on **8501** uses the existing workflow.
+  Development uses a separate checkout directory and the exact validated commit.
+- Layer logs and elapsed times are attached as seven-day GitHub artifacts and
+  recorded in the run's `metadata/run.json`. Failed runs retain their diagnostics;
+  a failed build does not deploy its GUI. Data directories remain on the VM and
+  need to be included in the project's disk-retention policy.
+
+GitHub schedules and the manual Run workflow button require the workflow to be
+registered on the **default branch**. Add the workflow there after review; it
+explicitly checks out the development branch, not main's pipeline code. See
+[GitHub's workflow-trigger documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+The self-hosted `dat535` runner must have the documented Spark/GUI environments,
+Java and Google Application Default Credentials with BigQuery access. Set the
+repository variable `GCP_PROJECT_ID` if its billing project is not supplied by
+those credentials.
+
+Each scheduled run is a **previous-day snapshot**, not a cumulative rebuild of
+the historical 53 dates. Existing Gold calculations and gates are unchanged,
+including the currently fixed 2026 season windows; extending seasonal analytics
+to December and subsequent years requires a separate Gold-policy update.
+
+Preview the commands without creating outputs or launching Spark:
+
+```bash
+python .github/scripts/run_dev_pipeline.py --start-layer staging \
+  --dates 2026-01-01 --run-root /tmp/dat535-dev-preview --dry-run
+```
+
 ## Tests
 
 ```bash
