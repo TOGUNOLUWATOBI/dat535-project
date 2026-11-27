@@ -28,6 +28,7 @@ src/
     Silver/         Calendars, planned and reported stop calls, reconciliation (build_silver.py + scripts/)
     Gold/           Punctuality, service and quality tables (build_gold.py + scripts/)
 tests/test_app.py   Every GUI page renders against the Gold run
+.github/workflows/  gui.yml: test and redeploy the GUI on the server
 docs/               Project definition and report (PDF)
 ```
 
@@ -108,6 +109,16 @@ timetable side by side.
 
 Every period number is shown with its sample (days, date range, weekdays),
 because each month is only 4–5 sampled days.
+
+## Deployment
+
+`.github/workflows/gui.yml` deploys the GUI on the school server's self-hosted
+runner (label `dat535`). After a push to `main` that changes `src/app/`,
+`tests/test_app.py` or `requirements.txt` (or when started by hand from the
+Actions tab), it tests every GUI page against the Gold data, restarts the GUI
+with `src/app/run_gui.sh --restart` and checks that port 8501 answers. The
+runner service must be running on the server:
+`sudo systemctl start actions.runner.TOGUNOLUWATOBI-dat535-project.dat535-spark.service`.
 
 ## Tests
 
