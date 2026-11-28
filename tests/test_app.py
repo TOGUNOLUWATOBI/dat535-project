@@ -9,8 +9,9 @@ GOLD = Path(os.environ.get("DAT535_GOLD_RUN", "/srv/dat535/data/gold/kol/runs/go
 PAGES = ["📊 Overview", "🚏 Lines", "📍 Stops", "🔄 Changes", "🩺 Data quality"]
 
 
-@unittest.skipUnless(importlib.util.find_spec("streamlit") and (GOLD / "gold_manifest.json").is_file(),
-                     "Needs Streamlit and the Gold run")
+@unittest.skipUnless(os.environ.get("DAT535_RUN_GUI_INTEGRATION") == "1"
+                     and importlib.util.find_spec("streamlit") and (GOLD / "gold_manifest.json").is_file(),
+                     "Opt in with DAT535_RUN_GUI_INTEGRATION=1; requires Streamlit and the historical Gold/Silver data")
 class GoldAppTests(unittest.TestCase):
     def open(self, page, period="winter-2026", mode="bus", event="departure"):
         from streamlit.testing.v1 import AppTest

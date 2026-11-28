@@ -203,8 +203,13 @@ python .github/scripts/run_dev_pipeline.py --start-layer staging \
 ## Tests
 
 ```bash
-~/dat535-gui-env/bin/python -B -m unittest tests.test_app -v
+python -B -m unittest discover -s tests -t . -v
 ```
+
+The suite uses temporary fixtures and mocked cloud calls. Install `requirements.txt`
+and Java 17 to run the Spark and Parquet tests. Historical GUI integration tests
+are opt-in. See [tests/README.md](tests/README.md) for commands, coverage and the
+five known Gold regressions currently recorded as expected failures.
 
 ## Data licence
 

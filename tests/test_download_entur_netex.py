@@ -1,89 +1,66 @@
-"""Regression tests for the shared Entur download helpers."""
+"""Historical publication selection and verified Bronze bytes, with no network access."""
 
 import base64
-import contextlib
 from datetime import date
 import hashlib
-import io
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 import zipfile
 
-from pipeline.ingestion import netex as downloader
+from pipeline.Bronze.Netex import bronze_entur_netex as bronze
 
 
-def archive_bytes(description="current"):
-    data = io.BytesIO()
-    with zipfile.ZipFile(data, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("KOL_line.xml", f"<line>{description}</line>")
-        archive.writestr("_stops.xml", "<stops/>")
-    return data.getvalue()
+class NetexDownloadTests(unittest.TestCase):
+    def test_monthly_sample_includes_leap_day_and_cutoff_once(self):
+        dates = bronze.iter_monthly_step_dates(2024, [2], cutoff_date=date(2024, 2, 29))
+        self.assertEqual(dates, [date(2024, 2, d) for d in (1, 8, 15, 22, 29)])
+        self.assertEqual(bronze.iter_monthly_step_dates(2026, [1], cutoff_date=date(2026, 1, 10)),
+                         [date(2026, 1, d) for d in (1, 8, 10)])
 
-
-def metadata(data):
-    return {"generation": "12345", "size": str(len(data)),
-            "md5Hash": base64.b64encode(hashlib.md5(data).digest()).decode()}
-
-
-class Response(io.BytesIO):
-    status = 200
-
-
-class DownloadTests(unittest.TestCase):
-    def setUp(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        self.raw = Path(temp.name) / "national/netex_20260115.zip"
-
-    def fetch(self, data, identity):
-        with patch.object(downloader.urllib.request, "urlopen", side_effect=lambda *a, **k: Response(data)) as media, \
-                contextlib.redirect_stdout(io.StringIO()):
-            checksum = downloader.download("https://example.invalid/x?generation=12345", self.raw, identity)
-        return checksum, media
-
-    def test_valid_download_is_saved_and_verified_copy_is_reused(self):
-        data = archive_bytes()
-        checksum, media = self.fetch(data, metadata(data))
-        self.assertEqual(checksum, hashlib.sha256(data).hexdigest())
-        self.assertEqual(self.raw.read_bytes(), data)
-        self.assertIn("generation=12345", media.call_args.args[0].full_url)
-        _, media = self.fetch(data, metadata(data))
-        media.assert_not_called()
-
-    def test_existing_source_mismatch_is_not_reused_or_overwritten(self):
-        stale = archive_bytes("stale")
-        self.raw.parent.mkdir(parents=True)
-        self.raw.write_bytes(stale)
-        updated = archive_bytes("updated")
-        with self.assertRaisesRegex(RuntimeError, "Source size/checksum mismatch"):
-            self.fetch(updated, metadata(updated))
-        self.assertEqual(self.raw.read_bytes(), stale)
-
-    def test_checksum_failure_after_download_keeps_the_downloaded_bytes(self):
-        data = archive_bytes()
-        wrong = {**metadata(data), "md5Hash": metadata(b"other")["md5Hash"]}
-        with self.assertRaisesRegex(RuntimeError, "Source size/checksum mismatch"):
-            self.fetch(data, wrong)
-        self.assertEqual(self.raw.read_bytes(), data)
-
-    def test_existing_partial_download_blocks_a_retry_into_the_same_place(self):
-        partial = self.raw.with_suffix(".part")
-        partial.parent.mkdir(parents=True)
-        partial.write_bytes(b"interrupted")
-        with self.assertRaises(FileExistsError):
-            self.fetch(archive_bytes(), None)
-        self.assertEqual(partial.read_bytes(), b"interrupted")
-
-    def test_month_selection_crosses_years_and_rejects_reversed_ranges(self):
-        months = downloader.month_range(date(2025, 11, 1), date(2026, 2, 1), 15)
-        self.assertEqual(months, [date(2025, 11, 15), date(2025, 12, 15), date(2026, 1, 15), date(2026, 2, 15)])
+    def test_invalid_month_selection_and_step_are_rejected(self):
+        for months in ("0", "13", "4-2"):
+            with self.subTest(months=months), self.assertRaises(ValueError):
+                bronze.parse_months(months)
         with self.assertRaises(ValueError):
-            downloader.month_range(date(2026, 2, 1), date(2026, 1, 1), 15)
-        with self.assertRaises(ValueError):
-            downloader.parse_month("2026-1")
+            bronze.iter_monthly_step_dates(2026, [1], step_days=0)
 
+    def test_selects_latest_publication_before_day_end_without_future_data(self):
+        versions = [
+            {"generation": "future", "timeCreated": "2026-01-02T00:00:00Z"},
+            {"generation": "early", "timeCreated": "2026-01-01T08:00:00Z"},
+            {"generation": "latest", "timeCreated": "2026-01-01T22:00:00Z", "size": "123"},
+            {"generation": "broken", "timeCreated": "not a timestamp"},
+        ]
+        chosen = bronze.resolve_publication_for_date(date(2026, 1, 1), versions)
+        self.assertEqual(chosen["generation"], "latest")
+        self.assertEqual(chosen["expected_size"], 123)
+        self.assertIsNone(bronze.resolve_publication_for_date(date(2025, 12, 31), versions))
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_valid_archive_is_verified_and_tampering_prevents_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("KOL/timetable.xml", "<PublicationDelivery/>")
+            content = path.read_bytes()
+            md5 = base64.b64encode(hashlib.md5(content).digest()).decode()
+            valid, error, sha, _ = bronze.validate_downloaded_archive(path, len(content), md5)
+            self.assertTrue(valid, error)
+            self.assertEqual(sha, hashlib.sha256(content).hexdigest())
+            record = {"target_date": "2026-01-01", "status": "downloaded", "file": str(path), "sha256": sha}
+            self.assertEqual(bronze.find_existing_download([record], "2026-01-01"), record)
+            path.write_bytes(b"changed")
+            self.assertIsNone(bronze.find_existing_download([record], "2026-01-01"))
+
+    def test_wrong_size_checksum_and_non_xml_archive_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("readme.txt", "not a timetable")
+            for size, checksum, reason in ((1, None, "Size mismatch"),
+                                           (None, "wrong", "MD5 mismatch"),
+                                           (None, None, "no .xml")):
+                with self.subTest(reason=reason):
+                    valid, error, _, _ = bronze.validate_downloaded_archive(path, size, checksum)
+                    self.assertFalse(valid)
+                    self.assertIn(reason, error)

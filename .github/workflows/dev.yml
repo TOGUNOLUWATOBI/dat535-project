@@ -62,7 +62,7 @@ jobs:
           PY
           find src .github/scripts -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
       - name: Test development orchestration
-        run: python -B -m unittest tests.test_dev_workflow tests.test_pipeline_history -v
+        run: python -B -m unittest discover -s tests -t . -v
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
