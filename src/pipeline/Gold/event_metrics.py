@@ -63,8 +63,8 @@ def non_empty(col: str):
     return F.when(value != "", value).otherwise(F.lit(None).cast("string"))
 
 
-def _slice(df: DataFrame, baseline: str, event: str) -> DataFrame:
-    """Event rows for one (baseline, event) slice."""
+def _slice_expr(baseline: str, event: str):
+    """One event struct, expanded with the other slices in a single source scan."""
     elig_col, delay_col, excl_col, line_col = SLICES[(baseline, event)]
     eligible = F.coalesce(F.col(elig_col).cast("boolean"), F.lit(False))
     if baseline == "netex_planned":
@@ -80,7 +80,7 @@ def _slice(df: DataFrame, baseline: str, event: str) -> DataFrame:
         plan = [F.lit(False), null("boolean"), null("double"), null("double"), F.lit(False), null("boolean")]
     line_id, quay_id = non_empty(line_col), non_empty("quay_id")
     resolved = lambda c: F.when(c.isNotNull(), F.lit("resolved")).otherwise(F.lit("unknown"))
-    return df.select(
+    return F.struct(
         F.col("provider").cast("string").alias("provider"),
         F.col("operating_date").cast("date").alias("operating_date"),
         F.col("source_silver_run_id").cast("string").alias("source_silver_run_id"),
@@ -107,11 +107,8 @@ def build_logical_event_projection(spark: SparkSession, inventory: SilverInvento
         columns += [f"{k}_{event}_utc" for k in ("aimed", "planned", "reported")] + [f"planned_{event}_disagreement_sec"]
     columns += sorted({c for spec in SLICES.values() for c in spec[:3]})
     calls = read_silver_table_for_inventory(spark, inventory, "reconciled_stop_calls", columns)
-    events = [_slice(calls, b, e) for b in BASELINES for e in ("departure", "arrival")]
-    out = events[0]
-    for df in events[1:]:
-        out = out.unionByName(df)
-    return out
+    events = [_slice_expr(b, e) for b in BASELINES for e in ("departure", "arrival")]
+    return calls.select(F.explode(F.array(*events)).alias("_event")).select("_event.*")
 
 
 def aggregate_punctuality(events_df: DataFrame, group_cols, *, gold_run_id: str,
@@ -124,9 +121,10 @@ def aggregate_punctuality(events_df: DataFrame, group_cols, *, gold_run_id: str,
     compared = netex & F.col("has_plan_comparison")
     checked = netex & F.col("ts_identity_checked")
 
-    def pct(column: str, q: float, where: str):
-        sql = f"percentile_approx(CASE WHEN {where} THEN {column} END, {q}, {int(percentile_accuracy)})"
-        return F.expr(sql).cast("double")
+    def pct(column: str, quantiles, where: str):
+        qs = ', '.join(str(q) for q in quantiles)
+        sql = f"percentile_approx(CASE WHEN {where} THEN {column} END, array({qs}), {int(percentile_accuracy)})"
+        return F.expr(sql)
 
     in_delay = "eligible AND delay_sec IS NOT NULL"
     in_plan = "baseline = 'netex_planned' AND has_plan_comparison"
@@ -144,17 +142,24 @@ def aggregate_punctuality(events_df: DataFrame, group_cols, *, gold_run_id: str,
         F.coalesce(F.sum(F.when(eligible, delay).otherwise(null("double"))), F.lit(0.0)).cast("double").alias("delay_sum_sec"),
         F.coalesce(F.sum(F.when(eligible & (delay > 0.0), delay).otherwise(F.lit(0.0))), F.lit(0.0))
         .cast("double").alias("positive_delay_sum_sec"),
-        pct("delay_sec", 0.5, in_delay).alias("median_delay_sec"),
-        pct("delay_sec", 0.9, in_delay).alias("p90_delay_sec"),
-        pct("delay_sec", 0.95, in_delay).alias("p95_delay_sec"),
+        pct("delay_sec", [0.5, 0.9, 0.95], in_delay).alias("_delay_percentiles"),
         count_if(compared, "_compared"),
         count_if(compared & F.coalesce(F.col("plan_agreed"), F.lit(False)), "_agreed"),
         F.avg(F.when(compared, F.col("plan_disagreement_sec"))).cast("double").alias("_mean_gap"),
-        pct("abs_plan_disagreement_sec", 0.5, in_plan).alias("_median_gap"),
-        pct("abs_plan_disagreement_sec", 0.95, in_plan).alias("_p95_gap"),
+        pct("abs_plan_disagreement_sec", [0.5, 0.95], in_plan).alias("_gap_percentiles"),
         count_if(checked, "_checked"),
         count_if(checked & F.coalesce(F.col("ts_identity_failed"), F.lit(False)), "_failed"),
     )
+    # Expand in place to retain the public column order as well as its types.
+    columns = []
+    for name in out.columns:
+        names = {"_delay_percentiles": ["median_delay_sec", "p90_delay_sec", "p95_delay_sec"],
+                 "_gap_percentiles": ["_median_gap", "_p95_gap"]}.get(name)
+        if names:
+            columns.extend(F.col(name).getItem(i).cast("double").alias(label) for i, label in enumerate(names))
+        else:
+            columns.append(F.col(name))
+    out = out.select(*columns)
     for rate, count in [("mean_delay_sec", "delay_sum_sec"), ("within_window_rate", "within_window_count"),
                         ("early_rate", "early_count"), ("late_rate", "late_count"),
                         ("severe_delay_rate", "severe_delay_count")]:
